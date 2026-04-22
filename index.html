@@ -1,0 +1,1754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>📚 学习助手 - 英文朗读 & 中文听写</title>
+    <script src="https://unpkg.com/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+    <script src="https://unpkg.com/mammoth@1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 { text-align: center; color: #333; margin-bottom: 6px; font-size: 22px; }
+        .subtitle { text-align: center; color: #888; font-size: 13px; margin-bottom: 20px; }
+
+        /* ========== Tab栏 ========== */
+        .tab-bar {
+            display: flex;
+            gap: 0;
+            margin-bottom: 25px;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #f0f0f0;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 22px 10px;
+            border: none;
+            font-size: 18px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background: #e0e0e0;
+            color: #999;
+        }
+        .tab-btn.active {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102,126,234,0.3);
+        }
+        .tab-btn:not(.active):hover {
+            background: #d5d5d5;
+            color: #777;
+        }
+        .tab-btn .tab-desc {
+            display: block;
+            font-size: 12px;
+            font-weight: 400;
+            opacity: 0.85;
+            margin-top: 3px;
+        }
+
+        /* ========== 页面切换 ========== */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* ========== 英文朗读样式 ========== */
+        .upload-section {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px 20px;
+            text-align: center;
+            background: #f8f9ff;
+            transition: all 0.3s;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .upload-section:hover { background: #e8ecff; border-color: #764ba2; }
+        .upload-icon { font-size: 48px; margin-bottom: 10px; }
+        .upload-text { color: #666; font-size: 16px; }
+        .upload-hint { color: #999; font-size: 12px; margin-top: 8px; }
+        #fileInput { display: none; }
+        .preview-section { display: none; margin-bottom: 20px; }
+        .preview-section img { width: 100%; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .text-section { display: none; margin-bottom: 20px; }
+        .text-section textarea {
+            width: 100%; min-height: 150px; padding: 15px;
+            border: 2px solid #e0e0e0; border-radius: 10px;
+            font-size: 16px; line-height: 1.6; resize: vertical; font-family: inherit;
+        }
+        .text-section textarea:focus { outline: none; border-color: #667eea; }
+        .status {
+            text-align: center; padding: 15px; border-radius: 10px;
+            margin-bottom: 20px; display: none;
+        }
+        .status.loading { display: block; background: #fff3cd; color: #856404; }
+        .status.success { display: block; background: #d4edda; color: #155724; }
+        .status.error { display: block; background: #f8d7da; color: #721c24; }
+        .status.info { display: block; background: #d1ecf1; color: #0c5460; }
+        .controls-section { display: none; background: #f8f9fa; border-radius: 15px; padding: 20px; }
+        .voice-selection { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .voice-btn {
+            flex: 1; min-width: 100px; padding: 12px 20px;
+            border: 2px solid #667eea; background: white; color: #667eea;
+            border-radius: 25px; cursor: pointer; font-size: 14px; transition: all 0.3s;
+        }
+        .voice-btn.active { background: #667eea; color: white; }
+        .progress-bar {
+            width: 100%; height: 8px; background: #e0e0e0;
+            border-radius: 4px; margin-bottom: 15px; cursor: pointer; position: relative;
+        }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); border-radius: 4px; width: 0%; transition: width 0.1s; }
+        .time-display { display: flex; justify-content: space-between; font-size: 12px; color: #666; margin-bottom: 15px; }
+        .main-controls { display: flex; justify-content: center; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .control-btn {
+            width: 50px; height: 50px; border-radius: 50%; border: none;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 20px; transition: all 0.3s;
+        }
+        .control-btn.secondary { background: #e0e0e0; color: #333; }
+        .control-btn.secondary:hover { background: #d0d0d0; }
+        .control-btn.primary { width: 70px; height: 70px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; font-size: 28px; }
+        .control-btn.primary:hover { transform: scale(1.05); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
+        .speed-controls { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+        .speed-btn {
+            padding: 8px 16px; border: 2px solid #ddd; background: white;
+            border-radius: 20px; cursor: pointer; font-size: 13px; transition: all 0.3s;
+        }
+        .speed-btn:hover { border-color: #667eea; color: #667eea; }
+        .speed-btn.active { background: #667eea; color: white; border-color: #667eea; }
+        .section-title { font-size: 14px; color: #666; margin-bottom: 10px; font-weight: 600; }
+        .highlight-info {
+            background: #e3f2fd; border-left: 4px solid #2196f3;
+            padding: 12px 15px; border-radius: 0 8px 8px 0;
+            margin-bottom: 15px; font-size: 13px; color: #1976d2;
+        }
+
+        /* ========== 中文听写样式 ========== */
+        .dictation-top-controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .dictation-top-controls .voice-command-btn {
+            flex: 1.2;
+        }
+        .dictation-top-controls .start-btn {
+            flex: 1;
+            padding: 18px 20px;
+            background: linear-gradient(135deg, #11998e, #38ef7d);
+            color: white; border: none; border-radius: 50px;
+            font-size: 17px; font-weight: 600; cursor: pointer;
+            transition: all 0.3s;
+            display: flex; align-items: center; justify-content: center;
+            gap: 8px; box-shadow: 0 4px 15px rgba(17,153,142,0.3);
+        }
+        .dictation-top-controls .start-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 6px 20px rgba(17,153,142,0.4);
+        }
+        .dictation-top-controls .start-btn:disabled {
+            opacity: 0.4; cursor: not-allowed; transform: none;
+            box-shadow: none;
+        }
+
+        .voice-command-btn {
+            padding: 18px 20px;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white; border: none; border-radius: 50px;
+            font-size: 17px; font-weight: 600; cursor: pointer;
+            transition: all 0.3s;
+            display: flex; align-items: center; justify-content: center;
+            gap: 8px; box-shadow: 0 4px 15px rgba(238,90,36,0.3);
+        }
+        .voice-command-btn:hover {
+            transform: scale(1.02);
+            box-shadow: 0 6px 20px rgba(238,90,36,0.4);
+        }
+        .voice-command-btn.listening {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .command-hint {
+            background: #fff3cd; border-left: 4px solid #ffc107;
+            padding: 12px 15px; border-radius: 0 8px 8px 0;
+            margin-bottom: 15px; font-size: 12px; color: #856404; line-height: 1.6;
+        }
+        .command-display {
+            background: #e3f2fd; border-radius: 12px;
+            padding: 15px; margin-bottom: 15px; min-height: 50px;
+        }
+        .command-label { font-size: 12px; color: #666; margin-bottom: 6px; }
+        .command-text { font-size: 16px; color: #1976d2; font-weight: 600; }
+
+        .dictation-display {
+            background: #fff; border: 3px solid #11998e;
+            border-radius: 15px; padding: 25px;
+            text-align: center; margin-bottom: 15px;
+            min-height: 180px; display: flex;
+            flex-direction: column; justify-content: center;
+        }
+        .dictation-word { font-size: 42px; font-weight: 700; color: #333; margin-bottom: 15px; }
+        .dictation-round { font-size: 16px; color: #666; margin-bottom: 8px; }
+        .dictation-timer { font-size: 32px; color: #11998e; font-weight: 600; }
+
+        .dictation-controls-row {
+            display: flex; gap: 10px; justify-content: center;
+            margin-bottom: 15px;
+        }
+        .dictation-btn {
+            padding: 12px 24px; border: none; border-radius: 25px;
+            font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s;
+        }
+        .dictation-btn.stop { background: linear-gradient(135deg, #ff6b6b, #ee5a24); color: white; }
+        .dictation-btn.skip { background: #f0f0f0; color: #666; }
+        .dictation-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* 词语表链接 */
+        .vocab-link-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 15px; padding: 10px 15px;
+            background: #f0fff4; border-radius: 10px;
+        }
+        .vocab-link { color: #11998e; font-weight: 600; cursor: pointer; text-decoration: underline; font-size: 15px; }
+        .vocab-link:hover { color: #0d7a6e; }
+        .vocab-count { font-size: 13px; color: #666; }
+
+        /* 弹窗 */
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;
+            padding: 20px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: white; border-radius: 16px; width: 100%; max-width: 500px;
+            max-height: 80vh; display: flex; flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal-header {
+            padding: 18px 20px; border-bottom: 1px solid #eee;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .modal-header h3 { font-size: 17px; color: #333; }
+        .modal-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: #f0f0f0; color: #666; font-size: 18px; cursor: pointer;
+        }
+        .modal-body {
+            padding: 15px 20px; overflow-y: auto; flex: 1;
+        }
+        .modal-unit { margin-bottom: 18px; }
+        .modal-unit-title { font-weight: 600; color: #11998e; margin-bottom: 8px; font-size: 14px; }
+        .modal-lesson { margin-bottom: 10px; padding-left: 12px; }
+        .modal-lesson-title { font-weight: 500; color: #555; font-size: 13px; margin-bottom: 5px; }
+        .modal-words { display: flex; flex-wrap: wrap; gap: 6px; }
+        .modal-word {
+            background: #e8f5e9; padding: 4px 10px; border-radius: 12px;
+            font-size: 13px; color: #2e7d32;
+        }
+        .modal-word.underlined {
+            background: #fff3e0; color: #e65100;
+            text-decoration: underline;
+        }
+
+        /* 缩小版上传区域 */
+        .upload-vocab-compact {
+            padding: 14px;
+            border: 2px dashed #38ef7d;
+            border-radius: 10px;
+            background: white;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s;
+            margin-bottom: 10px;
+        }
+        .upload-vocab-compact:hover { background: #f0fff4; border-color: #11998e; }
+        .upload-vocab-compact .compact-icon { font-size: 22px; margin-bottom: 4px; }
+        .upload-vocab-compact .compact-text { color: #666; font-size: 13px; }
+        .upload-vocab-compact .compact-hint { color: #999; font-size: 11px; margin-top: 4px; }
+
+        .vocab-status {
+            background: #d4edda; color: #155724;
+            padding: 10px 12px; border-radius: 8px;
+            margin-bottom: 10px; font-size: 13px;
+        }
+        .sample-data-btn {
+            background: #e3f2fd; color: #1976d2;
+            border: 2px solid #1976d2; padding: 8px 16px;
+            border-radius: 20px; cursor: pointer; font-size: 13px;
+        }
+        .sample-data-btn:hover { background: #1976d2; color: white; }
+
+        .file-format-hint { font-size: 11px; color: #888; margin-top: 6px; line-height: 1.4; }
+
+        /* 设置面板 */
+        .settings-panel {
+            background: #f8f9fa; border-radius: 12px;
+            padding: 15px; margin-bottom: 15px;
+        }
+        .settings-title { font-size: 13px; color: #666; font-weight: 600; margin-bottom: 10px; }
+        .settings-row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+        .settings-row label { font-size: 13px; color: #555; white-space: nowrap; }
+        .settings-row select, .settings-row input {
+            padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px;
+            font-size: 13px; flex: 1;
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 15px; }
+            h1 { font-size: 18px; }
+            .tab-btn { padding: 18px 8px; font-size: 15px; }
+            .tab-btn .tab-desc { font-size: 11px; }
+            .dictation-word { font-size: 32px; }
+            .control-btn { width: 45px; height: 45px; font-size: 18px; }
+            .control-btn.primary { width: 60px; height: 60px; font-size: 24px; }
+            .dictation-top-controls { flex-direction: column; }
+            .dictation-top-controls .voice-command-btn,
+            .dictation-top-controls .start-btn { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📚 学习助手</h1>
+        <p class="subtitle">英文朗读 & 中文听写</p>
+
+        <!-- Tab栏 -->
+        <div class="tab-bar">
+            <button class="tab-btn active" id="tabEnglish" onclick="switchTab('english')">
+                🇺🇸 英文朗读
+                <span class="tab-desc">拍照识别 · 美/英朗读</span>
+            </button>
+            <button class="tab-btn" id="tabChinese" onclick="switchTab('chinese')">
+                🇨🇳 中文听写
+                <span class="tab-desc">智能报听写 · 语音控制</span>
+            </button>
+        </div>
+
+        <!-- 英文朗读内容 -->
+        <div id="contentEnglish" class="tab-content active">
+            <div class="highlight-info">
+                💡 小学三年级英语听力速度约为每分钟 80-100 词，对应 1 倍速
+            </div>
+
+            <div class="upload-section" id="uploadSection">
+                <div class="upload-icon">📷</div>
+                <div class="upload-text">点击或拖拽上传英文照片</div>
+                <div class="upload-hint">支持 JPG、PNG 格式</div>
+            </div>
+            <input type="file" id="fileInput" accept="image/*">
+
+            <div class="status" id="status"></div>
+
+            <div class="preview-section" id="previewSection">
+                <img id="previewImage" alt="上传的图片">
+            </div>
+
+            <div class="text-section" id="textSection">
+                <div class="section-title">📝 识别到的文本（可编辑）</div>
+                <textarea id="textContent" placeholder="识别的文本将显示在这里，您可以直接修改..."></textarea>
+            </div>
+
+            <div class="controls-section" id="controlsSection">
+                <div class="section-title">🎙️ 选择发音</div>
+                <div class="voice-selection">
+                    <button class="voice-btn active" id="usVoice" onclick="selectVoice('en-US')">🇺🇸 美式发音</button>
+                    <button class="voice-btn" id="ukVoice" onclick="selectVoice('en-GB')">🇬🇧 英式发音</button>
+                </div>
+
+                <div class="section-title">⏯️ 播放控制</div>
+                <div class="progress-bar" id="progressBar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="time-display">
+                    <span id="currentTime">0:00</span>
+                    <span id="totalTime">0:00</span>
+                </div>
+
+                <div class="main-controls">
+                    <button class="control-btn secondary" onclick="seek(-10)">⏪</button>
+                    <button class="control-btn primary" id="playBtn" onclick="togglePlay()">▶️</button>
+                    <button class="control-btn secondary" onclick="seek(10)">⏩</button>
+                </div>
+
+                <div class="section-title">⚡ 播放速度</div>
+                <div class="speed-controls">
+                    <button class="speed-btn" data-speed="0.5" onclick="setSpeed(0.5)">0.5x</button>
+                    <button class="speed-btn" data-speed="0.75" onclick="setSpeed(0.75)">0.75x</button>
+                    <button class="speed-btn active" data-speed="1" onclick="setSpeed(1)">1x (标准)</button>
+                    <button class="speed-btn" data-speed="1.5" onclick="setSpeed(1.5)">1.5x</button>
+                    <button class="speed-btn" data-speed="2" onclick="setSpeed(2)">2x</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 中文听写内容 -->
+        <div id="contentChinese" class="tab-content">
+            <!-- 上方控制区：说要求 + 开始听写 -->
+            <div class="dictation-top-controls">
+                <button class="voice-command-btn" id="voiceCommandBtn" onclick="startVoiceCommand()">
+                    🎤 说要求
+                </button>
+                <button class="start-btn" id="startDictationBtn" onclick="startDictation()" disabled>
+                    ▶️ 开始听写
+                </button>
+            </div>
+
+            <!-- 指令显示 -->
+            <div class="command-display" id="commandDisplay" style="display:none">
+                <div class="command-label">识别到的指令：</div>
+                <div class="command-text" id="commandText"></div>
+            </div>
+
+            <!-- 听写显示区 -->
+            <div class="dictation-display" id="dictationDisplay" style="display:none">
+                <div class="dictation-round" id="dictationRound">准备开始...</div>
+                <div class="dictation-word" id="dictationWord">-</div>
+                <div class="dictation-timer" id="dictationTimer"></div>
+            </div>
+
+            <!-- 听写控制 -->
+            <div class="dictation-controls-row" id="dictationControlsRow" style="display:none">
+                <button class="dictation-btn stop" id="stopDictationBtn" onclick="stopDictation()">⏹️ 停止听写</button>
+                <button class="dictation-btn skip" id="skipBtn" onclick="skipGroup()">⏭️ 下一组</button>
+            </div>
+
+            <!-- 提示 -->
+            <div class="command-hint">
+                💬 <strong>语音指令示例：</strong><br>
+                "报第一单元到第三单元的词语" · "报第8课的词语"<br>
+                "报语文园地一的词语" · "报30个词语，每3个为一组"<br>
+                听写过程中说"下一组"可跳过当前组
+            </div>
+
+            <!-- 词语表链接栏 -->
+            <div class="vocab-link-bar" id="vocabLinkBar" style="display:none">
+                <span class="vocab-link" onclick="openVocabModal()">📖 二年级下册词语表</span>
+                <span class="vocab-count" id="vocabCountText"></span>
+            </div>
+
+            <!-- 状态 -->
+            <div class="status" id="dictationStatus"></div>
+
+            <!-- 下方：上传区域（缩小） -->
+            <div style="margin-top: 20px;">
+                <div style="font-size: 13px; color: #666; font-weight: 600; margin-bottom: 8px;">📄 上传词语表</div>
+                <div class="upload-vocab-compact" id="uploadVocabBtn" onclick="document.getElementById('vocabInput').click()">
+                    <div class="compact-icon">📄</div>
+                    <div class="compact-text">点击上传词语表文件</div>
+                    <div class="compact-hint">支持 .txt .csv .json .doc .docx .pdf</div>
+                </div>
+                <input type="file" id="vocabInput" accept=".txt,.csv,.json,.doc,.docx,.pdf" style="display:none">
+
+                <div id="vocabStatus" style="display:none"></div>
+
+                <div style="display:flex; gap:10px; margin-top:8px;">
+                    <button class="sample-data-btn" onclick="loadSampleData()">
+                        📝 使用示例数据
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 词语表弹窗 -->
+    <div class="modal-overlay" id="vocabModal" onclick="closeVocabModal(event)">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>📖 二年级下册词语表</h3>
+                <button class="modal-close" onclick="closeVocabModal()">×</button>
+            </div>
+            <div class="modal-body" id="vocabModalBody">
+                <!-- 动态填充 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 设置 PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // ==================== Tab切换 ====================
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            if (tab === 'english') {
+                document.getElementById('tabEnglish').classList.add('active');
+                document.getElementById('contentEnglish').classList.add('active');
+                stopDictation();
+            } else {
+                document.getElementById('tabChinese').classList.add('active');
+                document.getElementById('contentChinese').classList.add('active');
+                stopEnglish();
+            }
+        }
+
+        // ==================== 英文朗读功能 ====================
+        let currentText = '', isPlaying = false, currentSpeed = 1;
+        let selectedVoice = 'en-US', speechUtterance = null;
+        let words = [], currentWordIndex = 0;
+        let startTime = 0, estimatedDuration = 0, progressInterval = null;
+
+        const uploadSection = document.getElementById('uploadSection');
+        const fileInput = document.getElementById('fileInput');
+        const status = document.getElementById('status');
+        const previewSection = document.getElementById('previewSection');
+        const previewImage = document.getElementById('previewImage');
+        const textSection = document.getElementById('textSection');
+        const textContent = document.getElementById('textContent');
+        const controlsSection = document.getElementById('controlsSection');
+        const playBtn = document.getElementById('playBtn');
+        const progressFill = document.getElementById('progressFill');
+
+        uploadSection.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFileSelect);
+        uploadSection.addEventListener('dragover', (e) => { e.preventDefault(); uploadSection.classList.add('dragover'); });
+        uploadSection.addEventListener('dragleave', () => uploadSection.classList.remove('dragover'));
+        uploadSection.addEventListener('drop', (e) => {
+            e.preventDefault(); uploadSection.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) processImage(file);
+        });
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) processImage(file);
+        }
+
+        function processImage(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => { previewImage.src = e.target.result; previewSection.style.display = 'block'; };
+            reader.readAsDataURL(file);
+            showStatus('正在识别文字，请稍候...', 'loading');
+            Tesseract.recognize(file, 'eng', {
+                logger: m => { if (m.status === 'recognizing text') showStatus(`正在识别... ${Math.round(m.progress * 100)}%`, 'loading'); }
+            }).then(({ data: { text } }) => {
+                currentText = text.trim();
+                if (currentText) {
+                    textContent.value = currentText;
+                    textSection.style.display = 'block';
+                    controlsSection.style.display = 'block';
+                    showStatus('✅ 文字识别成功！', 'success');
+                    const wordCount = currentText.split(/\s+/).length;
+                    estimatedDuration = (wordCount / 100) * 60;
+                    document.getElementById('totalTime').textContent = formatTime(estimatedDuration);
+                    setTimeout(() => status.style.display = 'none', 3000);
+                } else {
+                    showStatus('⚠️ 未能识别到文字，请尝试上传更清晰的图片', 'error');
+                }
+            }).catch(err => { console.error(err); showStatus('❌ 识别失败，请重试', 'error'); });
+        }
+
+        function showStatus(msg, type) {
+            status.textContent = msg; status.className = 'status ' + type; status.style.display = 'block';
+        }
+        function selectVoice(lang) {
+            selectedVoice = lang;
+            document.getElementById('usVoice').classList.toggle('active', lang === 'en-US');
+            document.getElementById('ukVoice').classList.toggle('active', lang === 'en-GB');
+            if (isPlaying) { stopEnglish(); playEnglish(); }
+        }
+        function setSpeed(speed) {
+            currentSpeed = speed;
+            document.querySelectorAll('.speed-btn').forEach(btn => btn.classList.toggle('active', parseFloat(btn.dataset.speed) === speed));
+            const wordCount = currentText.split(/\s+/).length;
+            estimatedDuration = (wordCount / 100) * 60 / speed;
+            document.getElementById('totalTime').textContent = formatTime(estimatedDuration);
+            if (isPlaying && speechUtterance) {
+                const currentPos = currentWordIndex; stopEnglish(); currentWordIndex = currentPos; playEnglish();
+            }
+        }
+        function togglePlay() { isPlaying ? pauseEnglish() : playEnglish(); }
+        function playEnglish() {
+            if (!currentText) return;
+            currentText = textContent.value.trim();
+            words = currentText.split(/\s+/);
+            if (words.length === 0) return;
+            isPlaying = true; playBtn.textContent = '⏸️';
+            speechUtterance = new SpeechSynthesisUtterance();
+            speechUtterance.text = words.slice(currentWordIndex).join(' ');
+            speechUtterance.rate = currentSpeed; speechUtterance.pitch = 1; speechUtterance.volume = 1;
+            const voices = speechSynthesis.getVoices();
+            const voice = voices.find(v => v.lang === selectedVoice) || voices.find(v => v.lang.startsWith('en')) || voices[0];
+            if (voice) speechUtterance.voice = voice;
+            speechUtterance.onboundary = (e) => { if (e.name === 'word') { currentWordIndex++; updateProgress(); } };
+            speechUtterance.onend = () => {
+                if (currentWordIndex >= words.length) {
+                    isPlaying = false; currentWordIndex = 0; playBtn.textContent = '▶️'; updateProgress(); clearInterval(progressInterval);
+                }
+            };
+            speechUtterance.onerror = (e) => { if (e.error !== 'canceled') { isPlaying = false; playBtn.textContent = '▶️'; } };
+            speechSynthesis.speak(speechUtterance);
+            startTime = Date.now();
+            progressInterval = setInterval(updateProgressDisplay, 100);
+        }
+        function pauseEnglish() { isPlaying = false; playBtn.textContent = '▶️'; speechSynthesis.pause(); clearInterval(progressInterval); }
+        function stopEnglish() { speechSynthesis.cancel(); isPlaying = false; playBtn.textContent = '▶️'; clearInterval(progressInterval); }
+        function seek(seconds) {
+            const wordCount = words.length;
+            const currentTime = (currentWordIndex / wordCount) * estimatedDuration;
+            const newTime = Math.max(0, Math.min(estimatedDuration, currentTime + seconds));
+            currentWordIndex = Math.floor((newTime / estimatedDuration) * wordCount);
+            updateProgress();
+            if (isPlaying) { stopEnglish(); playEnglish(); }
+        }
+        function updateProgress() {
+            progressFill.style.width = (words.length > 0 ? (currentWordIndex / words.length) * 100 : 0) + '%';
+        }
+        function updateProgressDisplay() {
+            if (!isPlaying) return;
+            const elapsed = (Date.now() - startTime) / 1000 * currentSpeed;
+            const currentElapsed = (currentWordIndex / words.length) * estimatedDuration + elapsed;
+            document.getElementById('currentTime').textContent = formatTime(Math.min(currentElapsed, estimatedDuration));
+            updateProgress();
+        }
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+        document.getElementById('progressBar').addEventListener('click', (e) => {
+            const rect = e.target.getBoundingClientRect();
+            const percent = (e.clientX - rect.left) / rect.width;
+            currentWordIndex = Math.floor(percent * words.length);
+            updateProgress();
+            if (isPlaying) { stopEnglish(); playEnglish(); }
+        });
+
+        // ==================== 中文听写：数据结构与解析 ====================
+
+        // 解析后的词语数据结构
+        // vocabData = {
+        //   units: [ { name:'第一单元', marker:'一', lessons:[{num:1, words:[...]}, ...], park:[...], allWords:[...] } ],
+        //   rawWords: [{text:'春天', underlined:false, unit:'第一单元', lesson:1}, ...]
+        // }
+        let vocabData = { units: [], rawWords: [] };
+        let selectedWords = [];     // 本次听写选中的词 [{text, underlined}]
+        let dictationGroups = [];   // 分组 [['词1','词2','词3'], ...]
+        let currentGroupIndex = 0;
+        let isDictating = false;
+        let dictationTimer = null;
+        let countdownTimer = null;
+        let recognition = null;
+        let isListening = false;
+        let currentCommand = null;  // 解析后的指令对象
+
+        const DEFAULT_WORD_COUNT = 30;
+        const GROUP_SIZE = 3;
+        const PAUSE_FIRST_TO_SECOND = 5;   // 第一遍到第二遍等待5秒
+        const PAUSE_SECOND_TO_NEXT = 50;  // 第二遍到下一组等待50秒
+        const WORDS_PER_LESSON_MIN = 30;  // 不足30个词则全部报完
+
+        // ==================== 默认词语表数据（二年级下册 - 可编辑版）====================
+        const defaultRawText = `二年级下册词语表
+1. <u>古诗</u>　<u>诗句</u>　<u>诗人</u>　儿童　童真　童年　碧绿　碧玉　化妆　绿色
+　　绿地　绿豆　丝带　丝瓜　剪刀　剪开　回归　归来　归还
+2. <u>春天</u>　<u>寻找</u>　<u>眉毛</u>　<u>野花</u>　<u>柳枝</u>　<u>桃花</u>　冲出　冲开　寻人　寻问
+　　吐气　柳条　柳树　柳叶　回荡　桃子　仙桃　见闻　听闻　奇闻
+　　荡秋千　空荡荡
+3. <u>鲜花</u>　<u>先生</u>　<u>原来</u>　<u>大叔</u>　<u>太太</u>　<u>做客</u>　<u>正巧</u>　<u>快活</u>　<u>美好</u>　<u>惊奇</u>
+　　<u>礼物</u>　生鲜　鲜活　原因　原形　叔叔　通过　通常　通行　巧手
+　　巧合　惊动　惊奇　惊人　礼品　送礼
+4. <u>植树</u>　<u>格外</u>　<u>休息</u>　<u>小心</u>　<u>笔直</u>　<u>碧空如洗</u>　<u>万里无云</u>　<u>引人注目</u>
+　　种植　植物　格言　风格　引号　引发　关注　满足　美满　大雨如注
+一　剧本　剧情　剧场　话剧　广场　农场　场面　场合
+5. <u>叔叔</u>　<u>雷锋</u>　<u>昨天</u>　<u>温暖</u>　<u>爱心</u>　刀锋　锋利　昨日　洒水　雷雨
+　　打雷　地雷　背后　背包　背带　汗水　出汗　温和　气温　暖冬
+　　暖阳　暖洋洋
+6. <u>也许</u>　<u>桌子</u>　<u>平时</u>　<u>难道</u>　<u>好奇</u>　<u>平常</u>　<u>加工</u>　<u>农民</u>　<u>农具</u>　<u>甜菜</u>
+　　<u>工具</u>　<u>劳动</u>　<u>经过</u>　<u>应该</u>　课桌　圆桌　收买　买通　具体　学具
+　　甘心　甘苦　甜味　清甜　香甜　品尝　尝鲜　白菜　菜园　辛劳
+　　代劳　应当　应用　答应　劳心劳力
+7. <u>弱小</u>　<u>周末</u>　<u>父母</u>　<u>吸引</u>　<u>芬芳</u>　<u>背包</u>　<u>雨衣</u>　<u>为什么</u>　<u>勇敢</u>　弱点
+　　色弱　本周　周日　年末　末路　母爱　母校　吸收　吸气　芬芳
+　　芳华　芳香　芳名　快递　递进　递送　勇气　勇士　敢问　不敢
+二　工程　路程　进程　学术　马术　手术　服务　衣服　服从　家务
+　　业务　劳务
+①　<u>神州</u>　<u>中华</u>　<u>山川</u>　<u>民族</u>　<u>长江</u>　<u>长城</u>　<u>情谊</u>　神情　神话　神气活现
+②　贴纸　贴画　街道　街头　大街　传递　传说　传奇　统一　总统
+　　艾草　敬爱　<u>转眼</u>　清扫　打扫　扫地　龙头　火龙　<u>龙舟</u>　全家
+　　全面　<u>团圆</u>　团体　真心　真情　认真　<u>节日</u>　<u>春节</u>　<u>花灯</u>　<u>先人</u>
+　　<u>中秋</u>　<u>传统</u>　<u>清明节</u>
+③　甲虫　甲鱼　马甲　骨头　骨气　<u>钱币</u>　金钱　外币　午觉　觉得
+　　财物　财产　<u>钱财</u>　相与　与其　采购　购买　品行　品格　作品
+　　品种　<u>样子</u>　<u>有关</u>　<u>故事</u>　<u>生活</u>　<u>甲骨文</u>　人民币
+④　食物　食品　<u>茄子</u>　烤鸡　烤火　烤电　<u>羊肉</u>　鸡蛋　蛋白　坏蛋
+　　米饭　<u>美食</u>　吃饭　早饭　鸭子　野鸭　<u>烤鸭</u>　鸡肉　公鸡　煮饭
+　　煮菜　<u>蛋炒饭</u>　<u>水煮鱼</u>
+三　辣手　辛辣　几乎　似乎　合乎　近乎　关乎　在乎　火辣辣
+8. <u>彩色</u>　做梦　美梦　<u>森林</u>　<u>雪松</u>　生硬　过硬　硬菜　铅字　宝盒
+　　森林　<u>苹果</u>　结果　打结　精神　<u>精灵</u>　精力　神灵　灵活　灵动
+　　流动　河流　流行　<u>歌声</u>　<u>季节</u>　<u>流动</u>　<u>铅笔盒</u>　活灵活现
+9.　马匹　<u>妹妹</u>　水波　波动　<u>波纹</u>　条纹　花纹　恋爱　恋情　恋家
+　　农舍　舍得　求知　求学　飞奔　奔向　奔跑　<u>出色</u>　<u>碧绿</u>　<u>柳树</u>
+　　<u>枝条</u>　<u>不时</u>　<u>恋恋不舍</u>
+10. 旁边　身旁　旁白　<u>阿姨</u>　小姨　<u>弟弟</u>　弟子　方便　便民　便利
+　　教书　教课　阿公　拼写　比拼　拼接　音乐　声音　话音　<u>绿色</u>
+　　<u>一直</u>　<u>说话</u>　<u>童话</u>　<u>拼音</u>　<u>字母</u>　<u>发明</u>　<u>发现</u>　<u>上升</u>
+四　平坦　坦克　夹克　克服　巧克力
+11. 死亡　灭亡　流亡　牢房　把牢　坐牢　劝说　<u>劝告</u>　丢失　丢脸
+12. 补助　补习　补课　补牙　助长　助力　助手　好坏　坏事　生死
+　　死活　<u>明白</u>　<u>禾苗</u>　<u>力气</u>　<u>亡羊补牢</u>
+　　室外　画室　家室　排骨　排队　排长　反而　而今　而后　果实
+　　现实　事实　气候　<u>时候</u>　候补　下班　夜班　晚班　<u>座位</u>　举行
+　　举动　举手　<u>神情</u>　<u>讲桌</u>　<u>教室</u>　<u>画纸</u>　<u>杨桃</u>　<u>图画</u>　笑哈哈
+　　<u>五角星</u>　<u>哈哈大笑</u>　<u>老老实实</u>
+13. 心愿　情愿　自愿　<u>愿意</u>　意思　意外　意见　麦子　麦苗　麦田
+　　<u>伯伯</u>　伯父　伯母　<u>立刻</u>　刻刀　时刻　<u>突然</u>　突出　然后　自然
+　　掉头　掉队　<u>飞快</u>　<u>为难</u>　<u>吃惊</u>　<u>认真</u>　<u>难为情</u>
+五　商品　商家　商人　大厦　商厦　广厦　空洞　地洞　洞穴　穴位
+14. 窗口　门窗　包含　含片　泊船　泊车　泊位　吴国　莲花　莲子
+　　莲心　干净　明净　净化　净身　映照　放映　反映　山岭　分水岭
+15. <u>雷雨</u>　<u>雷声</u>　<u>乌云</u>　乌黑　黑白　黑色　沉思　低沉　响亮　响动
+　　<u>清新</u>　新闻　新春　新年　欢迎　迎风　<u>迎面</u>　扑打　扑空　<u>窗户</u>
+　　<u>闪电</u>　<u>房子</u>　<u>黑沉沉</u>　扑面而来　一声不响
+16. 手指　指出　指导　<u>指点</u>　打针　针头　时针　分针　<u>帮助</u>　<u>帮忙</u>
+　　南方　南面　<u>向导</u>　领导　开导　劝导　<u>忠实</u>　忠告　<u>永远</u>　永别
+　　永久　<u>黑夜</u>　夜晚　夜空　过夜　<u>特别</u>　特产　特点　<u>积雪</u>　积木
+　　积分　<u>野外</u>　<u>天然</u>　<u>方向</u>　<u>北极星</u>　<u>指南针</u>　积少成多
+17. 航空　领航　航运　宇航　宇宙　或许　或是　或然　浴室　浴巾
+　　浴衣　<u>浴桶</u>　铁桶　油桶　饭桶　<u>活动</u>　<u>主要</u>　<u>方便</u>　<u>直接</u>　<u>清理</u>
+　　<u>实在</u>　<u>通常</u>　<u>航天员</u>　<u>空间站</u>　<u>宇宙飞船</u>
+六　饭馆　会馆　面馆　所以　住所　一无所有　所作所为
+18. <u>扇子</u>　风扇　电扇　慢车　快慢　<u>遇到</u>　奇遇　遇难　<u>一定</u>　定向
+19. <u>商店</u>　店长　店名　<u>决定</u>　对决　决战　需要　军需　支付　应付
+　　付出　<u>工夫</u>　夫人　大夫　<u>终于</u>　终点　终结　周期　日期　<u>星期</u>
+　　<u>河马</u>
+20. <u>青蛙</u>　蛙跳　牛蛙　卖力　外卖　搬家　搬运　倒车　倒立　倒挂
+　　<u>泉水</u>　泉眼　温泉　山泉　破坏　冲破　破产　砍树　砍刀　蛙泳
+　　冬泳　泳衣　<u>野鸭</u>　<u>花丛</u>　<u>尽情</u>　<u>游泳</u>　卖东西
+21. 仿照　仿真　仿写　<u>仿佛</u>　佛门　佛爷　<u>纺织</u>　纺线　织布　织女
+　　合并　并进　信任　就任　如何　为何　何时　<u>迟到</u>　迟早　<u>灵巧</u>
+　　<u>到处</u>　<u>怎样</u>　<u>目光</u>　<u>周游</u>　<u>以前</u>　<u>色彩</u>　<u>花纹</u>　<u>新奇</u>　<u>任何</u>　<u>事情</u>
+七　学校　校服　校外　校内　室内　屋内　内外
+22. 射手　发射　<u>最后</u>　最美　<u>开始</u>　始终　起始　更换　交换　转换
+　　<u>值日</u>　数值　净值　弓步　弓背　弓形　消炎　发炎　此刻　此事
+　　如此　<u>从此</u>　<u>光明</u>　<u>决心</u>　<u>欢唱</u>　<u>生机</u>
+23. <u>忽然</u>　忽视　忽闪　文件　物件　事件　启动　<u>启发</u>　开启　<u>号召</u>
+　　召见　群众　听众　<u>民众</u>　完全　完成　完结　却步　冷却　了却
+　　供应　供品　供需　<u>传说</u>　<u>首领</u>　<u>步行</u>　<u>搬运</u>　<u>自由</u>　<u>道理</u>　<u>根本</u>
+　　<u>果然</u>　<u>提供</u>　<u>便利</u>
+24. <u>洪水</u>　洪亮　<u>百姓</u>　姓名　皮带　<u>带领</u>　带鱼　灾难　水灾　火灾
+　　<u>必须</u>　必然　务必　须得　<u>仍然</u>　仍需　仍有　<u>继续</u>　继任　继位
+　　连续　续写　续航　作业　<u>农业</u>　事业　<u>痛苦</u>　<u>反而</u>　<u>治服</u>　<u>采用</u>
+　　<u>奔波</u>　<u>安居乐业</u>
+八　灿烂　烂果　破烂　金灿灿
+`;
+
+        let hasCustomUpload = false;
+6. 脚步 亲切 邮局 太太
+7. 爷爷 大象 耳朵 扇子
+8. 后来 不安 整个 头痛
+十
+最后 人家 大象 耳朵 扇子 似的 慢 遇
+
+语文园地九
+九.
+羽扇 荧光棒 牵 斗牛舞 踢毽子 橡皮泥 溜溜球 汤圆 头 脊梁骨 陀螺`;
+
+        // ==================== 解析文本内容（新逻辑）====================
+        function parseVocabText(text) {
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            const units = [];
+            const rawWords = [];
+            let currentUnit = null;
+            let currentLessonNum = null;
+            let currentLessonWords = [];
+            const chineseNumbers = ['一','二','三','四','五','六','七','八','九','十'];
+
+            // 识别单元标记：独立的汉字数字（如"一"、"二"）
+            function isUnitMarker(line) {
+                return /^[一二三四五六七八九十]$/.test(line.trim());
+            }
+            // 识别课标记：数字+点/顿号/全角空格 如 "1." "②" "14、"
+            function isLessonMarker(line) {
+                return /^\d+[\.、]\s*/.test(line) || /^[①②③④⑤⑥⑦⑧⑨⑩]\s*/.test(line);
+            }
+            // 提取课号
+            function extractLessonNum(line) {
+                const match = line.match(/^(\d+)[\.、]\s*/);
+                if (match) return parseInt(match[1]);
+                const circledMatch = line.match(/^([①②③④⑤⑥⑦⑧⑨⑩])\s*/);
+                if (circledMatch) {
+                    const circledNums = {'①':1,'②':2,'③':3,'④':4,'⑤':5,'⑥':6,'⑦':7,'⑧':8,'⑨':9,'⑩':10};
+                    return circledNums[circledMatch[1]];
+                }
+                return null;
+            }
+            // 提取课后的词语
+            function extractLessonWords(line) {
+                const match = line.match(/^\d+[\.、]\s*(.*)$/);
+                if (match) return parseWordLine(match[1]);
+                const circledMatch = line.match(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*(.*)$/);
+                if (circledMatch) return parseWordLine(circledMatch[1]);
+                return [];
+            }
+            // 识别语文园地标记：汉字+点 如 "一." "二."
+            function isParkMarker(line) {
+                return /^[一二三四五六七八九十]\.\s*/.test(line.trim());
+            }
+            // 提取园地号
+            function extractParkNum(line) {
+                const match = line.match(/^([一二三四五六七八九十])\.\s*/);
+                return match ? match[1] : null;
+            }
+            // 解析一行词语
+            function parseWordLine(text) {
+                // 检查整行是否被 <u> 包裹（如 <u>词1 词2 词3</u>）
+                const fullUnderlineMatch = text.match(/^<u>(.*?)<\/u>$/);
+                if (fullUnderlineMatch) {
+                    // 整行都在下划线中，按空格/逗号/全角空格分隔，每个词都标记为下划线
+                    return fullUnderlineMatch[1].split(/[,，\s\u3000]+/).map(w => w.trim()).filter(w => w && w.length >= 1).map(w => ({ text: w, underlined: true }));
+                }
+
+                const words = [];
+                // 先尝试匹配带下划线的词语 <u>xxx</u> 或 _xxx_
+                const underlineRegex = /<u>([^<]+)<\/u>|_([^_\s]+)_/g;
+                let match;
+                let lastIndex = 0;
+                while ((match = underlineRegex.exec(text)) !== null) {
+                    const word = match[1] || match[2];
+                    if (word) {
+                        words.push({ text: word.trim(), underlined: true });
+                    }
+                    lastIndex = underlineRegex.lastIndex;
+                }
+                // 如果没有下划线标记，按空格/逗号/全角空格分隔
+                if (words.length === 0) {
+                    return text.split(/[,，\s\u3000]+/).map(w => w.trim()).filter(w => w && w.length >= 1).map(w => ({ text: w, underlined: false }));
+                }
+                // 有下划线的情况，还需要补充没有下划线的普通词语（简化处理：全部按空格分）
+                const allParts = text.split(/[,，\s\u3000]+/).map(w => w.trim()).filter(w => w);
+                const result = [];
+                const seen = new Set();
+                for (const part of allParts) {
+                    // 去掉下划线标记
+                    const cleanWord = part.replace(/^[_<u>]+|[_<\/u>]+$/g, '').trim();
+                    if (cleanWord && !seen.has(cleanWord)) {
+                        seen.add(cleanWord);
+                        // 检查原始文本中是否包含下划线标记
+                        const hasUnderline = part.includes('<u>') || part.includes('</u>') || (part.startsWith('_') && part.endsWith('_'));
+                        result.push({ text: cleanWord, underlined: hasUnderline });
+                    }
+                }
+                return result;
+            }
+
+            let i = 0;
+            while (i < lines.length) {
+                const line = lines[i];
+
+                // 检查是否是单元标题行（如"识字1"、"第一单元"）- 记录但暂不处理
+                if (/^识字\d+$/.test(line) || /^第[一二三四五六七八九十\d]+单元$/.test(line)) {
+                    // 单元标题，跳过（实际单元由汉字数字标记）
+                    i++;
+                    continue;
+                }
+
+                // 检查是否是单元标记（独立的汉字数字）
+                if (isUnitMarker(line)) {
+                    // 保存上一个单元的当前课
+                    if (currentUnit && currentLessonNum !== null && currentLessonWords.length > 0) {
+                        currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
+                    }
+
+                    const unitName = line + '单元'; // "一" -> "一单元"
+                    currentUnit = {
+                        name: unitName,
+                        marker: line,
+                        lessons: [],
+                        park: [],
+                        allWords: []
+                    };
+                    currentLessonNum = null;
+                    currentLessonWords = [];
+                    units.push(currentUnit);
+                    i++;
+                    continue;
+                }
+
+                // 检查是否是课标记（如 "1. 春天 寻找"）
+                if (isLessonMarker(line) && currentUnit) {
+                    // 保存上一个课
+                    if (currentLessonNum !== null && currentLessonWords.length > 0) {
+                        currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
+                    }
+                    currentLessonNum = extractLessonNum(line);
+                    currentLessonWords = extractLessonWords(line);
+                    // 加入rawWords
+                    for (const w of currentLessonWords) {
+                        rawWords.push({ ...w, unit: currentUnit.name, lesson: currentLessonNum });
+                    }
+                    i++;
+                    continue;
+                }
+
+                // 检查是否是语文园地标记（如 "一."）
+                if (isParkMarker(line)) {
+                    // 保存上一个单元/课的未完成内容
+                    if (currentUnit && currentLessonNum !== null && currentLessonWords.length > 0) {
+                        currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
+                        currentLessonNum = null;
+                        currentLessonWords = [];
+                    }
+                    // 如果当前没有单元上下文，尝试创建一个
+                    if (!currentUnit) {
+                        const parkNum = extractParkNum(line);
+                        currentUnit = {
+                            name: '语文园地' + parkNum,
+                            marker: parkNum,
+                            lessons: [],
+                            park: [],
+                            allWords: []
+                        };
+                        units.push(currentUnit);
+                    }
+                    // 提取园地后面的词语（可能在同一行或下一行）
+                    const parkWordsText = line.replace(/^[一二三四五六七八九十]\.\s*/, '').trim();
+                    let parkWords = [];
+                    if (parkWordsText) {
+                        parkWords = parseWordLine(parkWordsText);
+                    }
+                    // 检查下一行是否还有词语（不是标记行）
+                    i++;
+                    while (i < lines.length) {
+                        const nextLine = lines[i];
+                        if (isUnitMarker(nextLine) || isLessonMarker(nextLine) || isParkMarker(nextLine) || /^识字\d+$/.test(nextLine) || /^语文园地/.test(nextLine)) {
+                            break;
+                        }
+                        const moreWords = parseWordLine(nextLine);
+                        parkWords = parkWords.concat(moreWords);
+                        i++;
+                    }
+                    currentUnit.park = parkWords;
+                    for (const w of parkWords) {
+                        rawWords.push({ ...w, unit: currentUnit.name, lesson: null, isPark: true });
+                    }
+                    continue;
+                }
+
+                // 检查是否是"语文园地X"标题行
+                if (/^语文园地[一二三四五六七八九十]$/.test(line)) {
+                    i++;
+                    continue;
+                }
+
+                // 普通词语行（属于当前课或当前单元）
+                if (currentUnit) {
+                    const words = parseWordLine(line);
+                    if (words.length > 0) {
+                        if (currentLessonNum !== null) {
+                            currentLessonWords = currentLessonWords.concat(words);
+                            for (const w of words) {
+                                rawWords.push({ ...w, unit: currentUnit.name, lesson: currentLessonNum });
+                            }
+                        } else {
+                            // 没有课号，归入单元通用词语
+                            for (const w of words) {
+                                rawWords.push({ ...w, unit: currentUnit.name, lesson: null });
+                            }
+                        }
+                    }
+                }
+                i++;
+            }
+
+            // 保存最后一个单元的最后一个课
+            if (currentUnit && currentLessonNum !== null && currentLessonWords.length > 0) {
+                currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
+            }
+
+            // 为每个单元计算 allWords（去重）
+            for (const unit of units) {
+                const seen = new Set();
+                unit.allWords = [];
+                // 收集课内词语
+                for (const lesson of unit.lessons) {
+                    for (const w of lesson.words) {
+                        if (!seen.has(w.text)) {
+                            seen.add(w.text);
+                            unit.allWords.push(w);
+                        }
+                    }
+                }
+                // 收集园地词语
+                for (const w of unit.park) {
+                    if (!seen.has(w.text)) {
+                        seen.add(w.text);
+                        unit.allWords.push(w);
+                    }
+                }
+                // 收集没有课号的单元通用词语
+                const unitGeneralWords = rawWords.filter(w => w.unit === unit.name && w.lesson === null && !w.isPark);
+                for (const w of unitGeneralWords) {
+                    if (!seen.has(w.text)) {
+                        seen.add(w.text);
+                        unit.allWords.push(w);
+                    }
+                }
+            }
+
+            return { units, rawWords };
+        }
+
+        // 从原始数据构建词汇
+        function buildVocabFromData(data) {
+            vocabData = data;
+            updateVocabLinkBar();
+            document.getElementById('startDictationBtn').disabled = false;
+        }
+
+        function updateVocabLinkBar() {
+            const bar = document.getElementById('vocabLinkBar');
+            const countText = document.getElementById('vocabCountText');
+            if (vocabData.units.length > 0) {
+                const totalUnits = vocabData.units.length;
+                const totalWords = vocabData.rawWords.length;
+                const uniqueWords = new Set(vocabData.rawWords.map(w => w.text)).size;
+                countText.textContent = `${totalUnits}个单元 · ${uniqueWords}个词语`;
+                bar.style.display = 'flex';
+            } else {
+                bar.style.display = 'none';
+            }
+        }
+
+        // 弹窗展示词语表
+        function openVocabModal() {
+            const body = document.getElementById('vocabModalBody');
+            let html = '';
+            for (const unit of vocabData.units) {
+                html += `<div class="modal-unit">`;
+                html += `<div class="modal-unit-title">📘 ${unit.name}（共${unit.allWords.length}词）</div>`;
+
+                // 展示各课
+                for (const lesson of unit.lessons) {
+                    html += `<div class="modal-lesson">`;
+                    html += `<div class="modal-lesson-title">第${lesson.num}课（${lesson.words.length}词）</div>`;
+                    html += `<div class="modal-words">`;
+                    for (const w of lesson.words) {
+                        const cls = w.underlined ? 'modal-word underlined' : 'modal-word';
+                        html += `<span class="${cls}">${w.text}</span>`;
+                    }
+                    html += `</div></div>`;
+                }
+
+                // 展示语文园地
+                if (unit.park.length > 0) {
+                    html += `<div class="modal-lesson">`;
+                    html += `<div class="modal-lesson-title">🌳 语文园地（${unit.park.length}词）</div>`;
+                    html += `<div class="modal-words">`;
+                    for (const w of unit.park) {
+                        const cls = w.underlined ? 'modal-word underlined' : 'modal-word';
+                        html += `<span class="${cls}">${w.text}</span>`;
+                    }
+                    html += `</div></div>`;
+                }
+
+                html += `</div>`;
+            }
+            body.innerHTML = html;
+            document.getElementById('vocabModal').classList.add('active');
+        }
+        function closeVocabModal(e) {
+            if (!e || e.target === document.getElementById('vocabModal') || e.target.classList.contains('modal-close')) {
+                document.getElementById('vocabModal').classList.remove('active');
+            }
+        }
+
+        // ==================== 文件上传与解析 ====================
+        document.getElementById('vocabInput').addEventListener('change', handleVocabUpload);
+
+        async function parseWordFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const result = await mammoth.extractRawText({ arrayBuffer: e.target.result });
+                        resolve(result.value);
+                    } catch (err) { reject(err); }
+                };
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        async function parsePdfFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        const pdf = await pdfjsLib.getDocument({ data: e.target.result }).promise;
+                        let fullText = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            fullText += textContent.items.map(item => item.str).join(' ') + '\n';
+                        }
+                        resolve(fullText);
+                    } catch (err) { reject(err); }
+                };
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        async function handleVocabUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const fileName = file.name.toLowerCase();
+            showDictationStatus('正在解析文件，请稍候...', 'loading');
+            try {
+                let content = '';
+                if (fileName.endsWith('.docx') || fileName.endsWith('.doc')) {
+                    content = await parseWordFile(file);
+                } else if (fileName.endsWith('.pdf')) {
+                    content = await parsePdfFile(file);
+                } else if (fileName.endsWith('.json')) {
+                    content = await file.text();
+                    const json = JSON.parse(content);
+                    // 尝试兼容旧格式
+                    if (Array.isArray(json.units)) {
+                        buildVocabFromData(json);
+                        hasCustomUpload = true;
+                        return;
+                    } else {
+                        // 旧格式 {单元名:[词语]}
+                        content = Object.entries(json).map(([k, v]) => `${k}\n${Array.isArray(v) ? v.join(' ') : v}`).join('\n\n');
+                    }
+                } else {
+                    content = await file.text();
+                }
+                if (typeof content === 'string' && content.trim()) {
+                    const data = parseVocabText(content);
+                    if (data.units.length > 0) {
+                        buildVocabFromData(data);
+                        hasCustomUpload = true;
+                        const uniqueWords = new Set(data.rawWords.map(w => w.text)).size;
+                        showDictationStatus(`✅ 解析成功！${data.units.length}个单元，${uniqueWords}个词语`, 'success');
+                    } else {
+                        showDictationStatus('⚠️ 未能识别到词语结构，请检查文件格式', 'error');
+                    }
+                }
+            } catch (err) {
+                console.error('文件解析错误:', err);
+                showDictationStatus('❌ 文件解析失败：' + (err.message || '未知错误'), 'error');
+            }
+        }
+
+        function loadDefaultData() {
+            if (!hasCustomUpload) {
+                const data = parseVocabText(defaultRawText);
+                buildVocabFromData(data);
+                const uniqueWords = new Set(data.rawWords.map(w => w.text)).size;
+                showDictationStatus(`✅ 已加载默认词语表：${data.units.length}个单元，${uniqueWords}个词语`, 'success');
+            }
+        }
+
+        function loadSampleData() {
+            const data = parseVocabText(defaultRawText);
+            buildVocabFromData(data);
+            const uniqueWords = new Set(data.rawWords.map(w => w.text)).size;
+            showDictationStatus(`✅ 已加载示例数据：${data.units.length}个单元，${uniqueWords}个词语`, 'success');
+        }
+
+        // ==================== 语音指令解析 ====================
+        function processVoiceCommand(transcript) {
+            console.log('识别到的指令:', transcript);
+            const commandDisplay = document.getElementById('commandDisplay');
+            const commandText = document.getElementById('commandText');
+            commandText.textContent = transcript;
+            commandDisplay.style.display = 'block';
+
+            // 先检查是否有数据
+            if (!vocabData || vocabData.units.length === 0) {
+                showDictationStatus('⚠️ 请先上传词语表或点击「使用示例数据」', 'error');
+                return;
+            }
+
+            const result = parseCommand(transcript);
+            if (!result.success) {
+                showDictationStatus('⚠️ ' + result.error, 'error');
+                // 自动显示手动输入界面
+                showManualCommandInput();
+                return;
+            }
+
+            currentCommand = result;
+            const words = selectWordsForDictation(result);
+            if (words.length === 0) {
+                showDictationStatus('⚠️ 未找到符合条件的词语', 'error');
+                return;
+            }
+
+            // 按权重随机打乱
+            selectedWords = weightedShuffle(words, result.count);
+
+            // 分组（每组3个）
+            dictationGroups = [];
+            for (let i = 0; i < selectedWords.length; i += GROUP_SIZE) {
+                dictationGroups.push(selectedWords.slice(i, i + GROUP_SIZE).map(w => w.text));
+            }
+            currentGroupIndex = 0;
+
+            // 更新指令显示
+            let desc = '';
+            if (result.type === 'unit_range') {
+                desc = `报${result.startUnit}到${result.endUnit}，共${selectedWords.length}词，分${dictationGroups.length}组`;
+            } else if (result.type === 'single_unit') {
+                desc = `报${result.unit}，共${selectedWords.length}词，分${dictationGroups.length}组`;
+            } else if (result.type === 'lesson') {
+                desc = `报第${result.lessonNum}课，共${selectedWords.length}词，分${dictationGroups.length}组`;
+            } else if (result.type === 'park') {
+                desc = `报${result.parkName}，共${selectedWords.length}词，分${dictationGroups.length}组`;
+            }
+            commandText.textContent = desc;
+            showDictationStatus(`✅ ${desc}`, 'success');
+            document.getElementById('startDictationBtn').disabled = false;
+        }
+
+        // 解析用户指令，返回范围信息
+        function parseCommand(text) {
+            const result = { count: DEFAULT_WORD_COUNT, groupSize: GROUP_SIZE };
+            const lower = text.toLowerCase();
+
+            // 提取数量
+            const countMatch = text.match(/(\d+)[个]?[词字]/);
+            if (countMatch) result.count = parseInt(countMatch[1]);
+
+            // 提取每组数量
+            const groupMatch = text.match(/每(\d+)[个]?[词字]?[为]?一?[组]/);
+            if (groupMatch) result.groupSize = parseInt(groupMatch[1]);
+
+            // 调试信息
+            console.log('解析指令:', text, 'vocabData.units:', vocabData.units.map(u => u.name));
+
+            // 1. 检查语文园地
+            const parkMatch = text.match(/语文园地[一二三四五六七八九十]/);
+            if (parkMatch) {
+                const parkName = parkMatch[0];
+                // 找到包含该园地的单元
+                const targetUnit = vocabData.units.find(u => u.name.includes(parkName.replace('语文园地', '')) || (u.park && u.park.length > 0));
+                if (!targetUnit) return { success: false, error: '未找到' + parkName + '（请先加载包含该园地的词语表）' };
+                return { success: true, type: 'park', parkName, unit: targetUnit, count: result.count };
+            }
+
+            // 2. 检查单元范围 "第一单元到第三单元" / "第一单元至第三单元"
+            const unitRangeMatch = text.match(/第([一二三四五六七八九十\d]+)单元[到至~](第)?([一二三四五六七八九十\d]+)单元/);
+            if (unitRangeMatch) {
+                const start = unitRangeMatch[1];
+                const end = unitRangeMatch[3];
+                const startUnit = findUnitByNumber(start);
+                const endUnit = findUnitByNumber(end);
+                if (!startUnit) return { success: false, error: '未找到第' + start + '单元（可用单元：' + vocabData.units.map(u => u.name).join('、') + '）' };
+                if (!endUnit) return { success: false, error: '未找到第' + end + '单元（可用单元：' + vocabData.units.map(u => u.name).join('、') + '）' };
+                return { success: true, type: 'unit_range', startUnit, endUnit, count: result.count };
+            }
+
+            // 3. 检查单个单元 "第一单元" / "第二单元"
+            const singleUnitMatch = text.match(/第([一二三四五六七八九十\d]+)单元/);
+            if (singleUnitMatch) {
+                const num = singleUnitMatch[1];
+                const unit = findUnitByNumber(num);
+                if (!unit) {
+                    const available = vocabData.units.map(u => u.name).join('、') || '无';
+                    return { success: false, error: '未找到第' + num + '单元（当前可用：' + available + '）' };
+                }
+                return { success: true, type: 'single_unit', unit, count: result.count };
+            }
+
+            // 4. 检查课 "第8课" / "第3课"
+            const lessonMatch = text.match(/第(\d+)[课課]/);
+            if (lessonMatch) {
+                const lessonNum = parseInt(lessonMatch[1]);
+                // 找到包含该课的单元
+                const unit = vocabData.units.find(u => u.lessons.some(l => l.num === lessonNum));
+                if (!unit) return { success: false, error: '未找到第' + lessonNum + '课（请确认该课存在于当前词语表中）' };
+                return { success: true, type: 'lesson', lessonNum, unit, count: result.count };
+            }
+
+            // 5. 模糊匹配：只说了"报词语"，默认全范围
+            if (lower.includes('报') || lower.includes('听写')) {
+                if (vocabData.units.length > 0) {
+                    return { success: true, type: 'unit_range', startUnit: vocabData.units[0], endUnit: vocabData.units[vocabData.units.length - 1], count: result.count };
+                }
+            }
+
+            return { success: false, error: '未能识别指令范围，请尝试说"报第一单元"或"报第5课"等' };
+        }
+
+        function findUnitByNumber(numStr) {
+            const chineseToNum = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10};
+            const num = chineseToNum[numStr] || parseInt(numStr);
+            if (!num) return null;
+            return vocabData.units.find(u => {
+                const m = u.marker;
+                const unitNum = chineseToNum[m];
+                return unitNum === num;
+            });
+        }
+
+        // 辅助函数：通过单元名称查找
+        function findUnitByName(name) {
+            // 直接匹配 name
+            let unit = vocabData.units.find(u => u.name === name);
+            if (unit) return unit;
+            // 尝试匹配 "第X单元" 格式
+            const match = name.match(/第([一二三四五六七八九十\d]+)单元/);
+            if (match) {
+                return findUnitByNumber(match[1]);
+            }
+            return null;
+        }
+
+        // 根据指令选择词语
+        function selectWordsForDictation(cmd) {
+            let pool = [];
+
+            if (cmd.type === 'park') {
+                pool = cmd.unit.park || [];
+            } else if (cmd.type === 'single_unit') {
+                pool = cmd.unit.allWords || [];
+            } else if (cmd.type === 'unit_range') {
+                const startIdx = vocabData.units.indexOf(cmd.startUnit);
+                const endIdx = vocabData.units.indexOf(cmd.endUnit);
+                for (let i = startIdx; i <= endIdx && i < vocabData.units.length; i++) {
+                    pool = pool.concat(vocabData.units[i].allWords || []);
+                }
+            } else if (cmd.type === 'lesson') {
+                const lesson = cmd.unit.lessons.find(l => l.num === cmd.lessonNum);
+                if (lesson) {
+                    pool = lesson.words || [];
+                    // 如果该课不足30个词，规则是"全部报完该课后结束"
+                    // 但这里只是返回可用词池，由调用方决定
+                }
+            }
+
+            // 去重
+            const seen = new Set();
+            return pool.filter(w => {
+                if (seen.has(w.text)) return false;
+                seen.add(w.text);
+                return true;
+            });
+        }
+
+        // 加权随机抽取并打乱
+        function weightedShuffle(words, count) {
+            // 如果指定了某课且总词数不足WORDS_PER_LESSON_MIN(30)，则全部报完
+            if (words.length <= WORDS_PER_LESSON_MIN) {
+                // 全部使用，但按权重打乱顺序
+                const pool = [...words];
+                const result = [];
+                while (pool.length > 0) {
+                    const totalWeight = pool.reduce((s, w) => s + (w.underlined ? 1.5 : 1.0), 0);
+                    let r = Math.random() * totalWeight;
+                    for (let i = 0; i < pool.length; i++) {
+                        const w = pool[i].underlined ? 1.5 : 1.0;
+                        r -= w;
+                        if (r <= 0) {
+                            result.push(pool[i]);
+                            pool.splice(i, 1);
+                            break;
+                        }
+                    }
+                }
+                return result;
+            }
+
+            // 词数足够，按count抽取
+            const pool = [...words];
+            const result = [];
+            const targetCount = Math.min(count, pool.length);
+            while (result.length < targetCount && pool.length > 0) {
+                const totalWeight = pool.reduce((s, w) => s + (w.underlined ? 1.5 : 1.0), 0);
+                let r = Math.random() * totalWeight;
+                for (let i = 0; i < pool.length; i++) {
+                    const w = pool[i].underlined ? 1.5 : 1.0;
+                    r -= w;
+                    if (r <= 0) {
+                        result.push(pool[i]);
+                        pool.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+            return result;
+        }
+
+        // ==================== 手动输入界面 ====================
+        function showManualCommandInput() {
+            const existing = document.getElementById('manualCommand');
+            if (existing) existing.remove();
+            const manualDiv = document.createElement('div');
+            manualDiv.id = 'manualCommand';
+
+            const unitOptions = vocabData.units.map((u, i) => `<option value="${i}">${u.name}</option>`).join('');
+            const lessonOptions = [];
+            for (const unit of vocabData.units) {
+                for (const lesson of unit.lessons) {
+                    lessonOptions.push(`<option value="${unit.name}|${lesson.num}">${unit.name} 第${lesson.num}课</option>`);
+                }
+            }
+
+            manualDiv.innerHTML = `
+                <div style="background:#f8f9fa; padding:15px; border-radius:10px; margin-top:15px;">
+                    <div style="margin-bottom:10px;">
+                        <label style="display:block; margin-bottom:5px; font-size:13px; color:#666;">范围类型：</label>
+                        <select id="manualRangeType" style="padding:8px; border-radius:5px; border:1px solid #ddd; width:100%;" onchange="toggleManualRange()">
+                            <option value="unit">按单元</option>
+                            <option value="lesson">按课</option>
+                        </select>
+                    </div>
+                    <div id="manualUnitRange" style="margin-bottom:10px;">
+                        <label style="display:block; margin-bottom:5px; font-size:13px; color:#666;">选择单元：</label>
+                        <select id="manualUnitStart" style="padding:8px; border-radius:5px; border:1px solid #ddd; width:48%;">${unitOptions}</select>
+                        <span style="margin:0 2%;">到</span>
+                        <select id="manualUnitEnd" style="padding:8px; border-radius:5px; border:1px solid #ddd; width:48%;">${unitOptions}</select>
+                    </div>
+                    <div id="manualLessonRange" style="margin-bottom:10px; display:none;">
+                        <label style="display:block; margin-bottom:5px; font-size:13px; color:#666;">选择课：</label>
+                        <select id="manualLesson" style="padding:8px; border-radius:5px; border:1px solid #ddd; width:100%;">${lessonOptions.join('')}</select>
+                    </div>
+                    <div style="margin-bottom:15px;">
+                        <label style="display:block; margin-bottom:5px; font-size:13px; color:#666;">词语数量（默认30）：</label>
+                        <input type="number" id="manualCount" value="30" min="1" max="100" style="padding:8px; border-radius:5px; border:1px solid #ddd; width:100%;">
+                    </div>
+                    <button onclick="applyManualCommand()" style="background:#11998e; color:white; border:none; padding:10px 20px; border-radius:20px; cursor:pointer; width:100%;">确认设置</button>
+                </div>
+            `;
+            document.getElementById('contentChinese').appendChild(manualDiv);
+        }
+
+        function toggleManualRange() {
+            const type = document.getElementById('manualRangeType').value;
+            document.getElementById('manualUnitRange').style.display = type === 'unit' ? 'block' : 'none';
+            document.getElementById('manualLessonRange').style.display = type === 'lesson' ? 'block' : 'none';
+        }
+
+        function applyManualCommand() {
+            const type = document.getElementById('manualRangeType').value;
+            const count = parseInt(document.getElementById('manualCount').value) || DEFAULT_WORD_COUNT;
+            let pool = [];
+            let desc = '';
+
+            if (type === 'unit') {
+                const startIdx = parseInt(document.getElementById('manualUnitStart').value);
+                const endIdx = parseInt(document.getElementById('manualUnitEnd').value);
+                const startUnit = vocabData.units[startIdx];
+                const endUnit = vocabData.units[endIdx];
+                if (!startUnit || !endUnit) {
+                    showDictationStatus('⚠️ 请选择有效的单元', 'error'); return;
+                }
+                const sIdx = Math.min(startIdx, endIdx);
+                const eIdx = Math.max(startIdx, endIdx);
+                for (let i = sIdx; i <= eIdx; i++) {
+                    pool = pool.concat(vocabData.units[i].allWords || []);
+                }
+                desc = `${startUnit.name}到${endUnit.name}`;
+            } else {
+                const lessonVal = document.getElementById('manualLesson').value;
+                const [unitName, lessonNum] = lessonVal.split('|');
+                const unit = vocabData.units.find(u => u.name === unitName);
+                const lesson = unit?.lessons.find(l => l.num === parseInt(lessonNum));
+                if (!lesson) {
+                    showDictationStatus('⚠️ 未找到该课', 'error'); return;
+                }
+                pool = lesson.words || [];
+                desc = `${unitName} 第${lessonNum}课`;
+            }
+
+            // 去重
+            const seen = new Set();
+            pool = pool.filter(w => { if (seen.has(w.text)) return false; seen.add(w.text); return true; });
+
+            selectedWords = weightedShuffle(pool, count);
+            dictationGroups = [];
+            for (let i = 0; i < selectedWords.length; i += GROUP_SIZE) {
+                dictationGroups.push(selectedWords.slice(i, i + GROUP_SIZE).map(w => w.text));
+            }
+            currentGroupIndex = 0;
+
+            const commandDisplay = document.getElementById('commandDisplay');
+            const commandText = document.getElementById('commandText');
+            commandText.textContent = `报${desc}，共${selectedWords.length}词，分${dictationGroups.length}组`;
+            commandDisplay.style.display = 'block';
+
+            document.getElementById('startDictationBtn').disabled = false;
+            showDictationStatus(`✅ 已设置：${desc}，${selectedWords.length}词，${dictationGroups.length}组`, 'success');
+            document.getElementById('manualCommand')?.remove();
+        }
+
+        // ==================== 语音识别 ====================
+        function startVoiceCommand() {
+            // 先检查是否有数据
+            if (!vocabData || vocabData.units.length === 0) {
+                showDictationStatus('⚠️ 请先上传词语表或点击「使用示例数据」再使用语音功能', 'error');
+                // 显示手动输入作为备选
+                showManualCommandInput();
+                return;
+            }
+
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                showDictationStatus('⚠️ 浏览器不支持语音识别，请使用手动输入', 'error');
+                showManualCommandInput();
+                return;
+            }
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.lang = 'zh-CN'; recognition.continuous = false; recognition.interimResults = false;
+            const btn = document.getElementById('voiceCommandBtn');
+            btn.classList.add('listening'); btn.innerHTML = '🎤 正在听...';
+            
+            let hasResult = false;
+            
+            recognition.onresult = (event) => {
+                hasResult = true;
+                const transcript = event.results[0][0].transcript;
+                processVoiceCommand(transcript);
+                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
+            };
+            
+            recognition.onerror = (event) => {
+                console.error('语音识别错误:', event.error);
+                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
+                // 只有当确实没有识别到结果时才报错
+                if (!hasResult) {
+                    showDictationStatus('⚠️ 没听清，请重试或手动输入', 'error');
+                    showManualCommandInput();
+                }
+            };
+            
+            recognition.onend = () => {
+                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
+                // 如果一直没有结果，提示用户
+                if (!hasResult) {
+                    showDictationStatus('⚠️ 请再试一次，或点击下方手动选择', 'info');
+                    showManualCommandInput();
+                }
+            };
+            
+            try {
+                recognition.start();
+            } catch (e) {
+                console.error('语音识别启动失败:', e);
+                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
+                showDictationStatus('⚠️ 语音启动失败，请手动输入', 'error');
+                showManualCommandInput();
+            }
+        }
+
+        // ==================== 报听写流程 ====================
+        function startDictation() {
+            if (dictationGroups.length === 0) {
+                showDictationStatus('⚠️ 请先设置听写范围', 'error');
+                return;
+            }
+            isDictating = true;
+            currentGroupIndex = 0;
+
+            document.getElementById('startDictationBtn').disabled = true;
+            document.getElementById('dictationControlsRow').style.display = 'flex';
+
+            const display = document.getElementById('dictationDisplay');
+            display.style.display = 'flex';
+
+            startContinuousListening();
+
+            let countdown = 5;
+            const roundEl = document.getElementById('dictationRound');
+            const wordEl = document.getElementById('dictationWord');
+            const timerEl = document.getElementById('dictationTimer');
+            roundEl.textContent = '准备开始...';
+            wordEl.textContent = countdown;
+            timerEl.textContent = '';
+
+            const preTimer = setInterval(() => {
+                countdown--;
+                wordEl.textContent = countdown > 0 ? countdown : '开始听写！';
+                if (countdown <= 0) {
+                    clearInterval(preTimer);
+                    setTimeout(() => speakNextGroup(), 800);
+                }
+            }, 1000);
+            dictationTimer = preTimer;
+        }
+
+        function speakNextGroup() {
+            if (!isDictating || currentGroupIndex >= dictationGroups.length) {
+                finishDictation();
+                return;
+            }
+            const group = dictationGroups[currentGroupIndex];
+            const roundEl = document.getElementById('dictationRound');
+            const wordEl = document.getElementById('dictationWord');
+            const timerEl = document.getElementById('dictationTimer');
+
+            roundEl.textContent = `第 ${currentGroupIndex + 1} / ${dictationGroups.length} 组`;
+            wordEl.textContent = group.join('  ');
+
+            // 第一遍朗读
+            let wordIndex = 0;
+            function speakFirstRound() {
+                if (wordIndex >= group.length || !isDictating) return;
+                const utterance = new SpeechSynthesisUtterance(group[wordIndex]);
+                utterance.lang = 'zh-CN'; utterance.rate = 0.8; utterance.pitch = 1;
+                utterance.onend = () => {
+                    wordIndex++;
+                    if (wordIndex < group.length) {
+                        setTimeout(() => speakFirstRound(), 800);
+                    } else {
+                        // 第一遍读完，等待 PAUSE_FIRST_TO_SECOND 秒念第二遍
+                        let waitCount = PAUSE_FIRST_TO_SECOND;
+                        timerEl.textContent = `${waitCount}秒后第二遍...`;
+                        countdownTimer = setInterval(() => {
+                            if (!isDictating) { clearInterval(countdownTimer); return; }
+                            waitCount--;
+                            timerEl.textContent = waitCount > 0 ? `${waitCount}秒后第二遍...` : '第二遍';
+                            if (waitCount <= 0) {
+                                clearInterval(countdownTimer);
+                                wordIndex = 0;
+                                setTimeout(() => speakSecondRound(), 600);
+                            }
+                        }, 1000);
+                    }
+                };
+                speechSynthesis.speak(utterance);
+            }
+
+            function speakSecondRound() {
+                if (wordIndex >= group.length || !isDictating) return;
+                const utterance = new SpeechSynthesisUtterance(group[wordIndex]);
+                utterance.lang = 'zh-CN'; utterance.rate = 0.8; utterance.pitch = 1;
+                utterance.onend = () => {
+                    wordIndex++;
+                    if (wordIndex < group.length) {
+                        setTimeout(() => speakSecondRound(), 800);
+                    } else {
+                        // 第二遍读完，等待 PAUSE_SECOND_TO_NEXT 秒下一组
+                        let waitCount = PAUSE_SECOND_TO_NEXT;
+                        timerEl.textContent = `${waitCount}秒后下一组...`;
+                        countdownTimer = setInterval(() => {
+                            if (!isDictating) { clearInterval(countdownTimer); return; }
+                            waitCount--;
+                            timerEl.textContent = waitCount > 0 ? `${waitCount}秒后下一组...` : '下一组';
+                            if (waitCount <= 0) {
+                                clearInterval(countdownTimer);
+                                currentGroupIndex++;
+                                speakNextGroup();
+                            }
+                        }, 1000);
+                    }
+                };
+                speechSynthesis.speak(utterance);
+            }
+
+            speakFirstRound();
+        }
+
+        function skipGroup() {
+            if (!isDictating) return;
+            clearInterval(countdownTimer);
+            speechSynthesis.cancel();
+            currentGroupIndex++;
+            if (currentGroupIndex < dictationGroups.length) {
+                setTimeout(() => speakNextGroup(), 500);
+            } else {
+                finishDictation();
+            }
+        }
+
+        function stopDictation() {
+            isDictating = false;
+            clearInterval(dictationTimer);
+            clearInterval(countdownTimer);
+            speechSynthesis.cancel();
+            if (recognition) recognition.stop();
+
+            document.getElementById('startDictationBtn').disabled = false;
+            document.getElementById('dictationControlsRow').style.display = 'none';
+            document.getElementById('dictationDisplay').style.display = 'none';
+            showDictationStatus('⏹️ 听写已停止', 'info');
+        }
+
+        function finishDictation() {
+            isDictating = false;
+            clearInterval(countdownTimer);
+            const roundEl = document.getElementById('dictationRound');
+            const wordEl = document.getElementById('dictationWord');
+            const timerEl = document.getElementById('dictationTimer');
+            roundEl.textContent = '完成！';
+            wordEl.textContent = '听写完毕';
+            timerEl.textContent = '';
+
+            const utterance = new SpeechSynthesisUtterance('听写完毕');
+            utterance.lang = 'zh-CN'; utterance.rate = 0.8;
+            speechSynthesis.speak(utterance);
+
+            setTimeout(() => {
+                stopDictation();
+                showDictationStatus('✅ 本次听写已完成！', 'success');
+            }, 4000);
+        }
+
+        // 持续监听"下一组"
+        function startContinuousListening() {
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.lang = 'zh-CN'; recognition.continuous = true; recognition.interimResults = false;
+            recognition.onresult = (event) => {
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (transcript.includes('下一组') || transcript.includes('跳过') || transcript.includes('下一')) {
+                        skipGroup();
+                    }
+                }
+            };
+            recognition.onerror = () => { if (isDictating) setTimeout(() => startContinuousListening(), 1000); };
+            recognition.onend = () => { if (isDictating) setTimeout(() => startContinuousListening(), 500); };
+            try { recognition.start(); } catch (e) { console.error('语音识别启动失败:', e); }
+        }
+
+        function showDictationStatus(msg, type) {
+            const statusDiv = document.getElementById('dictationStatus');
+            statusDiv.textContent = msg;
+            statusDiv.className = 'status ' + type;
+            statusDiv.style.display = 'block';
+            if (type !== 'loading') setTimeout(() => statusDiv.style.display = 'none', 5000);
+        }
+
+        // 预加载语音
+        speechSynthesis.getVoices();
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+        }
+
+        // 页面加载时自动加载默认词语表（如果用户未上传自定义文件）
+        window.addEventListener('DOMContentLoaded', () => {
+            loadDefaultData();
+        });
+    </script>
+</body>
+</html>
