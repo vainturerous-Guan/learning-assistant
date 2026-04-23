@@ -388,7 +388,7 @@
                 <div class="upload-text">点击从相册选择英文照片</div>
                 <div class="upload-hint">支持拍照或从相册选择</div>
             </div>
-            <input type="file" id="fileInput" accept="image/*" capture="environment" class="file-input-real">
+            <input type="file" id="fileInput" accept="image/*" class="file-input-real">
 
             <!-- 状态提示 -->
             <div class="status" id="status"></div>
@@ -558,6 +558,7 @@
         let words = [], currentWordIndex = 0;
         let startTime = 0, estimatedDuration = 0, progressInterval = null;
         let selectedImageFile = null;
+        let hasRecognizedCurrentImage = false;
 
         const uploadSection = document.getElementById('uploadSection');
         const fileInput = document.getElementById('fileInput');
@@ -619,9 +620,15 @@
                 recognizeBtn.disabled = false;
                 recognizeBtn.innerHTML = '🔍 开始识别文字';
 
+                // 新图片需要重新识别
+                currentText = '';
+                textContent.value = '';
+                hasRecognizedCurrentImage = false;
+
                 // 隐藏之前的文本和控件
                 textSection.style.display = 'none';
-                readBtnRow.style.display = 'none';
+                readBtnRow.style.display = 'flex';
+                readBtn.disabled = false;
                 controlsSection.style.display = 'none';
                 hideStatus();
 
@@ -632,28 +639,33 @@
             reader.readAsDataURL(file);
         }
 
-        // 开始识别
+        // 开始识别（保留旧入口）
         function startRecognition() {
-            if (!selectedImageFile) return;
+            recognizeSelectedImage(true);
+        }
+
+        async function recognizeSelectedImage(showSuccessHint = false) {
+            if (!selectedImageFile) return false;
             recognizeBtn.disabled = true;
             recognizeBtn.innerHTML = '🔍 识别中...';
             showStatus('正在识别文字，请稍候...', 'loading');
 
-            Tesseract.recognize(selectedImageFile, 'eng', {
-                logger: m => {
-                    if (m.status === 'recognizing text') {
-                        showStatus(`正在识别... ${Math.round(m.progress * 100)}%`, 'loading');
-                        recognizeBtn.innerHTML = `🔍 识别中 ${Math.round(m.progress * 100)}%`;
+            try {
+                const { data: { text } } = await Tesseract.recognize(selectedImageFile, 'eng', {
+                    logger: m => {
+                        if (m.status === 'recognizing text') {
+                            showStatus(`正在识别... ${Math.round(m.progress * 100)}%`, 'loading');
+                            recognizeBtn.innerHTML = `🔍 识别中 ${Math.round(m.progress * 100)}%`;
+                        }
                     }
-                }
-            }).then(({ data: { text } }) => {
+                });
                 currentText = text.trim();
                 if (currentText) {
                     textContent.value = currentText;
                     textSection.style.display = 'block';
-                    showStatus('✅ 文字识别成功！点击「开始朗读」即可播放', 'success');
+                    hasRecognizedCurrentImage = true;
+                    showStatus(showSuccessHint ? '✅ 文字识别成功！点击「开始朗读」即可播放' : '✅ 图片解析完成，开始朗读中...', 'success');
 
-                    // 显示朗读按钮
                     readBtnRow.style.display = 'flex';
                     readBtn.disabled = false;
 
@@ -661,22 +673,30 @@
                     estimatedDuration = (wordCount / 100) * 60;
                     document.getElementById('totalTime').textContent = formatTime(estimatedDuration);
 
-                    setTimeout(() => hideStatus(), 4000);
+                    setTimeout(() => hideStatus(), 3000);
+                    return true;
                 } else {
                     showStatus('⚠️ 未能识别到文字，请尝试上传更清晰的图片', 'error');
                     recognizeBtn.disabled = false;
                     recognizeBtn.innerHTML = '🔍 重新识别';
+                    return false;
                 }
-            }).catch(err => {
+            } catch (err) {
                 console.error(err);
                 showStatus('❌ 识别失败，请重试', 'error');
                 recognizeBtn.disabled = false;
                 recognizeBtn.innerHTML = '🔍 重新识别';
-            });
+                return false;
+            }
         }
 
         // 开始朗读
-        function startReading() {
+        async function startReading() {
+            if (!textContent.value.trim() && selectedImageFile && !hasRecognizedCurrentImage) {
+                const recognized = await recognizeSelectedImage(false);
+                if (!recognized) return;
+            }
+            currentText = textContent.value.trim();
             if (!currentText) return;
 
             // 展开播放器控件
@@ -923,25 +943,19 @@
 `;
 
         let hasCustomUpload = false;
-6. 脚步 亲切 邮局 太太
-7. 爷爷 大象 耳朵 扇子
-8. 后来 不安 整个 头痛
-十
-最后 人家 大象 耳朵 扇子 似的 慢 遇
-
-语文园地九
-九.
-羽扇 荧光棒 牵 斗牛舞 踢毽子 橡皮泥 溜溜球 汤圆 头 脊梁骨 陀螺`;
 
         // ==================== 解析文本内容（新逻辑）====================
         function parseVocabText(text) {
             const lines = text.split('\n').map(l => l.trim()).filter(l => l);
             const units = [];
             const rawWords = [];
-            let currentUnit = null;
+
+            // 暂存“尚未被单元标记确认”的内容；遇到“一/二/三...”时一次性归档到该单元
+            let pendingLessons = [];
+            let pendingPark = [];
+            let pendingGeneralWords = [];
             let currentLessonNum = null;
             let currentLessonWords = [];
-            const chineseNumbers = ['一','二','三','四','五','六','七','八','九','十'];
 
             // 识别单元标记：独立的汉字数字（如"一"、"二"）
             function isUnitMarker(line) {
@@ -1021,135 +1035,31 @@
                 return result;
             }
 
-            let i = 0;
-            while (i < lines.length) {
-                const line = lines[i];
-
-                // 检查是否是单元标题行（如"识字1"、"第一单元"）- 记录但暂不处理
-                if (/^识字\d+$/.test(line) || /^第[一二三四五六七八九十\d]+单元$/.test(line)) {
-                    // 单元标题，跳过（实际单元由汉字数字标记）
-                    i++;
-                    continue;
+            function flushCurrentLesson() {
+                if (currentLessonNum !== null && currentLessonWords.length > 0) {
+                    pendingLessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
                 }
-
-                // 检查是否是单元标记（独立的汉字数字）
-                if (isUnitMarker(line)) {
-                    // 保存上一个单元的当前课
-                    if (currentUnit && currentLessonNum !== null && currentLessonWords.length > 0) {
-                        currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
-                    }
-
-                    const unitName = line + '单元'; // "一" -> "一单元"
-                    currentUnit = {
-                        name: unitName,
-                        marker: line,
-                        lessons: [],
-                        park: [],
-                        allWords: []
-                    };
-                    currentLessonNum = null;
-                    currentLessonWords = [];
-                    units.push(currentUnit);
-                    i++;
-                    continue;
-                }
-
-                // 检查是否是课标记（如 "1. 春天 寻找"）
-                if (isLessonMarker(line) && currentUnit) {
-                    // 保存上一个课
-                    if (currentLessonNum !== null && currentLessonWords.length > 0) {
-                        currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
-                    }
-                    currentLessonNum = extractLessonNum(line);
-                    currentLessonWords = extractLessonWords(line);
-                    // 加入rawWords
-                    for (const w of currentLessonWords) {
-                        rawWords.push({ ...w, unit: currentUnit.name, lesson: currentLessonNum });
-                    }
-                    i++;
-                    continue;
-                }
-
-                // 检查是否是语文园地标记（如 "一."）
-                if (isParkMarker(line)) {
-                    // 保存上一个单元/课的未完成内容
-                    if (currentUnit && currentLessonNum !== null && currentLessonWords.length > 0) {
-                        currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
-                        currentLessonNum = null;
-                        currentLessonWords = [];
-                    }
-                    // 如果当前没有单元上下文，尝试创建一个
-                    if (!currentUnit) {
-                        const parkNum = extractParkNum(line);
-                        currentUnit = {
-                            name: '语文园地' + parkNum,
-                            marker: parkNum,
-                            lessons: [],
-                            park: [],
-                            allWords: []
-                        };
-                        units.push(currentUnit);
-                    }
-                    // 提取园地后面的词语（可能在同一行或下一行）
-                    const parkWordsText = line.replace(/^[一二三四五六七八九十]\.\s*/, '').trim();
-                    let parkWords = [];
-                    if (parkWordsText) {
-                        parkWords = parseWordLine(parkWordsText);
-                    }
-                    // 检查下一行是否还有词语（不是标记行）
-                    i++;
-                    while (i < lines.length) {
-                        const nextLine = lines[i];
-                        if (isUnitMarker(nextLine) || isLessonMarker(nextLine) || isParkMarker(nextLine) || /^识字\d+$/.test(nextLine) || /^语文园地/.test(nextLine)) {
-                            break;
-                        }
-                        const moreWords = parseWordLine(nextLine);
-                        parkWords = parkWords.concat(moreWords);
-                        i++;
-                    }
-                    currentUnit.park = parkWords;
-                    for (const w of parkWords) {
-                        rawWords.push({ ...w, unit: currentUnit.name, lesson: null, isPark: true });
-                    }
-                    continue;
-                }
-
-                // 检查是否是"语文园地X"标题行
-                if (/^语文园地[一二三四五六七八九十]$/.test(line)) {
-                    i++;
-                    continue;
-                }
-
-                // 普通词语行（属于当前课或当前单元）
-                if (currentUnit) {
-                    const words = parseWordLine(line);
-                    if (words.length > 0) {
-                        if (currentLessonNum !== null) {
-                            currentLessonWords = currentLessonWords.concat(words);
-                            for (const w of words) {
-                                rawWords.push({ ...w, unit: currentUnit.name, lesson: currentLessonNum });
-                            }
-                        } else {
-                            // 没有课号，归入单元通用词语
-                            for (const w of words) {
-                                rawWords.push({ ...w, unit: currentUnit.name, lesson: null });
-                            }
-                        }
-                    }
-                }
-                i++;
+                currentLessonNum = null;
+                currentLessonWords = [];
             }
 
-            // 保存最后一个单元的最后一个课
-            if (currentUnit && currentLessonNum !== null && currentLessonWords.length > 0) {
-                currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
-            }
+            function appendPendingToUnit(unit) {
+                for (const lesson of pendingLessons) {
+                    unit.lessons.push({ num: lesson.num, words: [...lesson.words] });
+                    for (const w of lesson.words) {
+                        rawWords.push({ ...w, unit: unit.name, lesson: lesson.num });
+                    }
+                }
+                for (const w of pendingPark) {
+                    unit.park.push(w);
+                    rawWords.push({ ...w, unit: unit.name, lesson: null, isPark: true });
+                }
+                for (const w of pendingGeneralWords) {
+                    rawWords.push({ ...w, unit: unit.name, lesson: null });
+                }
 
-            // 为每个单元计算 allWords（去重）
-            for (const unit of units) {
                 const seen = new Set();
                 unit.allWords = [];
-                // 收集课内词语
                 for (const lesson of unit.lessons) {
                     for (const w of lesson.words) {
                         if (!seen.has(w.text)) {
@@ -1158,20 +1068,97 @@
                         }
                     }
                 }
-                // 收集园地词语
                 for (const w of unit.park) {
                     if (!seen.has(w.text)) {
                         seen.add(w.text);
                         unit.allWords.push(w);
                     }
                 }
-                // 收集没有课号的单元通用词语
-                const unitGeneralWords = rawWords.filter(w => w.unit === unit.name && w.lesson === null && !w.isPark);
-                for (const w of unitGeneralWords) {
+                for (const w of pendingGeneralWords) {
                     if (!seen.has(w.text)) {
                         seen.add(w.text);
                         unit.allWords.push(w);
                     }
+                }
+
+                pendingLessons = [];
+                pendingPark = [];
+                pendingGeneralWords = [];
+            }
+
+            function commitUnitByMarker(marker) {
+                flushCurrentLesson();
+                const unit = {
+                    name: marker + '单元',
+                    marker,
+                    lessons: [],
+                    park: [],
+                    allWords: []
+                };
+                appendPendingToUnit(unit);
+                units.push(unit);
+            }
+
+            let i = 0;
+            while (i < lines.length) {
+                const line = lines[i];
+
+                if (/^识字\d+$/.test(line) || /^第[一二三四五六七八九十\d]+单元$/.test(line) || /^语文园地[一二三四五六七八九十]$/.test(line)) {
+                    i++;
+                    continue;
+                }
+
+                // 关键规则：单元标记（如"一"）出现时，把上方累计内容归入该单元
+                if (isUnitMarker(line)) {
+                    commitUnitByMarker(line);
+                    i++;
+                    continue;
+                }
+
+                if (isLessonMarker(line)) {
+                    flushCurrentLesson();
+                    currentLessonNum = extractLessonNum(line);
+                    currentLessonWords = extractLessonWords(line);
+                    i++;
+                    continue;
+                }
+
+                if (isParkMarker(line)) {
+                    flushCurrentLesson();
+                    const parkWordsText = line.replace(/^[一二三四五六七八九十]\.\s*/, '').trim();
+                    let parkWords = parkWordsText ? parseWordLine(parkWordsText) : [];
+                    i++;
+                    while (i < lines.length) {
+                        const nextLine = lines[i];
+                        if (isUnitMarker(nextLine) || isLessonMarker(nextLine) || isParkMarker(nextLine) || /^识字\d+$/.test(nextLine) || /^语文园地/.test(nextLine)) {
+                            break;
+                        }
+                        parkWords = parkWords.concat(parseWordLine(nextLine));
+                        i++;
+                    }
+                    pendingPark = pendingPark.concat(parkWords);
+                    continue;
+                }
+
+                const words = parseWordLine(line);
+                if (words.length > 0) {
+                    if (currentLessonNum !== null) {
+                        currentLessonWords = currentLessonWords.concat(words);
+                    } else {
+                        pendingGeneralWords = pendingGeneralWords.concat(words);
+                    }
+                }
+                i++;
+            }
+
+            flushCurrentLesson();
+            if (pendingLessons.length > 0 || pendingPark.length > 0 || pendingGeneralWords.length > 0) {
+                if (units.length === 0) {
+                    // 兜底：未识别到单元标记时，仍生成一个默认单元
+                    commitUnitByMarker('一');
+                } else {
+                    // 兼容“单元标记在上方”的文件格式：把尾部内容并到最后一个单元
+                    appendPendingToUnit(units[units.length - 1]);
                 }
             }
 
