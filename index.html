@@ -14,6 +14,14 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+        body.app-ready { opacity: 1; }
+        button {
+            min-height: 44px;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
         }
         .container {
             max-width: 600px;
@@ -455,8 +463,8 @@
         <div id="contentChinese" class="tab-content">
             <!-- 上方控制区：说要求 + 开始听写 -->
             <div class="dictation-top-controls">
-                <button class="voice-command-btn" id="voiceCommandBtn" onclick="startVoiceCommand()">
-                    🎤 说要求
+                <button class="voice-command-btn" id="voiceCommandBtn">
+                    🎤 按住说要求
                 </button>
                 <button class="start-btn" id="startDictationBtn" onclick="startDictation()" disabled>
                     ▶️ 开始听写
@@ -559,6 +567,9 @@
         let startTime = 0, estimatedDuration = 0, progressInterval = null;
         let selectedImageFile = null;
         let hasRecognizedCurrentImage = false;
+        let englishPlaybackTimeout = null;
+        const BASE_WPM = 80;
+        const SENTENCE_PAUSE_MS = 1000;
 
         const uploadSection = document.getElementById('uploadSection');
         const fileInput = document.getElementById('fileInput');
@@ -639,62 +650,55 @@
             reader.readAsDataURL(file);
         }
 
-        // 开始识别（保留旧入口）
+        // 开始识别
         function startRecognition() {
-            recognizeSelectedImage(true);
-        }
-
-        async function recognizeSelectedImage(showSuccessHint = false) {
-            if (!selectedImageFile) return false;
+            if (!selectedImageFile) return;
             recognizeBtn.disabled = true;
             recognizeBtn.innerHTML = '🔍 识别中...';
             showStatus('正在识别文字，请稍候...', 'loading');
 
-            try {
-                const { data: { text } } = await Tesseract.recognize(selectedImageFile, 'eng', {
-                    logger: m => {
-                        if (m.status === 'recognizing text') {
-                            showStatus(`正在识别... ${Math.round(m.progress * 100)}%`, 'loading');
-                            recognizeBtn.innerHTML = `🔍 识别中 ${Math.round(m.progress * 100)}%`;
-                        }
+            Tesseract.recognize(selectedImageFile, 'eng', {
+                logger: m => {
+                    if (m.status === 'recognizing text') {
+                        showStatus(`正在识别... ${Math.round(m.progress * 100)}%`, 'loading');
+                        recognizeBtn.innerHTML = `🔍 识别中 ${Math.round(m.progress * 100)}%`;
                     }
-                });
+                }
+            }).then(({ data: { text } }) => {
                 currentText = text.trim();
                 if (currentText) {
                     textContent.value = currentText;
                     textSection.style.display = 'block';
                     hasRecognizedCurrentImage = true;
-                    showStatus(showSuccessHint ? '✅ 文字识别成功！点击「开始朗读」即可播放' : '✅ 图片解析完成，开始朗读中...', 'success');
+                    showStatus('✅ 文字识别成功！点击「开始朗读」即可播放', 'success');
 
+                    // 显示朗读按钮
                     readBtnRow.style.display = 'flex';
                     readBtn.disabled = false;
 
                     const wordCount = currentText.split(/\s+/).length;
-                    estimatedDuration = (wordCount / 100) * 60;
+                    estimatedDuration = (wordCount / BASE_WPM) * 60;
                     document.getElementById('totalTime').textContent = formatTime(estimatedDuration);
 
-                    setTimeout(() => hideStatus(), 3000);
-                    return true;
+                    setTimeout(() => hideStatus(), 4000);
                 } else {
                     showStatus('⚠️ 未能识别到文字，请尝试上传更清晰的图片', 'error');
                     recognizeBtn.disabled = false;
                     recognizeBtn.innerHTML = '🔍 重新识别';
-                    return false;
                 }
-            } catch (err) {
+            }).catch(err => {
                 console.error(err);
                 showStatus('❌ 识别失败，请重试', 'error');
                 recognizeBtn.disabled = false;
                 recognizeBtn.innerHTML = '🔍 重新识别';
-                return false;
-            }
+            });
         }
 
         // 开始朗读
         async function startReading() {
             if (!textContent.value.trim() && selectedImageFile && !hasRecognizedCurrentImage) {
-                const recognized = await recognizeSelectedImage(false);
-                if (!recognized) return;
+                startRecognition();
+                return;
             }
             currentText = textContent.value.trim();
             if (!currentText) return;
@@ -732,7 +736,7 @@
                 btn.classList.toggle('active', parseFloat(btn.dataset.speed) === speed)
             );
             const wordCount = currentText.split(/\s+/).length;
-            estimatedDuration = (wordCount / 100) * 60 / speed;
+            estimatedDuration = (wordCount / BASE_WPM) * 60 / speed;
             document.getElementById('totalTime').textContent = formatTime(estimatedDuration);
             if (isPlaying && speechUtterance) {
                 const currentPos = currentWordIndex;
@@ -742,6 +746,15 @@
             }
         }
         function togglePlay() { isPlaying ? pauseEnglish() : playEnglish(); }
+        function getPreferredEnglishVoice(lang) {
+            const voices = speechSynthesis.getVoices();
+            const femaleHints = /(female|zira|samantha|victoria|karen|moira|ava|allison|susan|kathy|serena|lucy|aria|emma|jenny|siri)/i;
+            const maleHints = /(male|david|tom|alex|daniel|fred|jorge)/i;
+            const exact = voices.filter(v => v.lang === lang);
+            const byFamily = exact.length ? exact : voices.filter(v => v.lang.startsWith('en'));
+            const female = byFamily.find(v => femaleHints.test(v.name) && !maleHints.test(v.name));
+            return female || byFamily[0] || voices[0];
+        }
         function playEnglish() {
             if (!currentText) return;
             currentText = textContent.value.trim();
@@ -749,33 +762,47 @@
             if (words.length === 0) return;
             isPlaying = true;
             playBtn.textContent = '⏸️';
-            speechUtterance = new SpeechSynthesisUtterance();
-            speechUtterance.text = words.slice(currentWordIndex).join(' ');
-            speechUtterance.rate = currentSpeed;
-            speechUtterance.pitch = 1;
-            speechUtterance.volume = 1;
-            const voices = speechSynthesis.getVoices();
-            const voice = voices.find(v => v.lang === selectedVoice) || voices.find(v => v.lang.startsWith('en')) || voices[0];
-            if (voice) speechUtterance.voice = voice;
-            speechUtterance.onboundary = (e) => {
-                if (e.name === 'word') { currentWordIndex++; updateProgress(); }
-            };
-            speechUtterance.onend = () => {
-                if (currentWordIndex >= words.length) {
-                    isPlaying = false;
-                    currentWordIndex = 0;
-                    playBtn.textContent = '▶️';
-                    updateProgress();
-                    clearInterval(progressInterval);
+            if (englishPlaybackTimeout) clearTimeout(englishPlaybackTimeout);
+            const remainingText = words.slice(currentWordIndex).join(' ');
+            const sentenceQueue = remainingText.split(/(?<=[.!?。！？])\s+/).map(s => s.trim()).filter(Boolean);
+            const voice = getPreferredEnglishVoice(selectedVoice);
+
+            const speakSentence = (index) => {
+                if (!isPlaying || index >= sentenceQueue.length) {
+                    if (currentWordIndex >= words.length) {
+                        isPlaying = false;
+                        currentWordIndex = 0;
+                        playBtn.textContent = '▶️';
+                        updateProgress();
+                        clearInterval(progressInterval);
+                    }
+                    return;
                 }
+                speechUtterance = new SpeechSynthesisUtterance(sentenceQueue[index]);
+                speechUtterance.rate = currentSpeed;
+                speechUtterance.pitch = 1;
+                speechUtterance.volume = 1;
+                if (voice) speechUtterance.voice = voice;
+                speechUtterance.onboundary = (e) => {
+                    if (e.name === 'word') {
+                        currentWordIndex++;
+                        updateProgress();
+                    }
+                };
+                speechUtterance.onend = () => {
+                    if (!isPlaying) return;
+                    englishPlaybackTimeout = setTimeout(() => speakSentence(index + 1), SENTENCE_PAUSE_MS);
+                };
+                speechUtterance.onerror = (e) => {
+                    if (e.error !== 'canceled') {
+                        isPlaying = false;
+                        playBtn.textContent = '▶️';
+                        clearInterval(progressInterval);
+                    }
+                };
+                speechSynthesis.speak(speechUtterance);
             };
-            speechUtterance.onerror = (e) => {
-                if (e.error !== 'canceled') {
-                    isPlaying = false;
-                    playBtn.textContent = '▶️';
-                }
-            };
-            speechSynthesis.speak(speechUtterance);
+            speakSentence(0);
             startTime = Date.now();
             progressInterval = setInterval(updateProgressDisplay, 100);
         }
@@ -787,6 +814,10 @@
         }
         function stopEnglish() {
             speechSynthesis.cancel();
+            if (englishPlaybackTimeout) {
+                clearTimeout(englishPlaybackTimeout);
+                englishPlaybackTimeout = null;
+            }
             isPlaying = false;
             playBtn.textContent = '▶️';
             clearInterval(progressInterval);
@@ -847,321 +878,149 @@
         const WORDS_PER_LESSON_MIN = 30;  // 不足30个词则全部报完
 
         // ==================== 默认词语表数据（二年级下册 - 可编辑版）====================
-        const defaultRawText = `二年级下册词语表
-1. <u>古诗</u>　<u>诗句</u>　<u>诗人</u>　儿童　童真　童年　碧绿　碧玉　化妆　绿色
-　　绿地　绿豆　丝带　丝瓜　剪刀　剪开　回归　归来　归还
-2. <u>春天</u>　<u>寻找</u>　<u>眉毛</u>　<u>野花</u>　<u>柳枝</u>　<u>桃花</u>　冲出　冲开　寻人　寻问
-　　吐气　柳条　柳树　柳叶　回荡　桃子　仙桃　见闻　听闻　奇闻
-　　荡秋千　空荡荡
-3. <u>鲜花</u>　<u>先生</u>　<u>原来</u>　<u>大叔</u>　<u>太太</u>　<u>做客</u>　<u>正巧</u>　<u>快活</u>　<u>美好</u>　<u>惊奇</u>
-　　<u>礼物</u>　生鲜　鲜活　原因　原形　叔叔　通过　通常　通行　巧手
-　　巧合　惊动　惊奇　惊人　礼品　送礼
-4. <u>植树</u>　<u>格外</u>　<u>休息</u>　<u>小心</u>　<u>笔直</u>　<u>碧空如洗</u>　<u>万里无云</u>　<u>引人注目</u>
-　　种植　植物　格言　风格　引号　引发　关注　满足　美满　大雨如注
-一　剧本　剧情　剧场　话剧　广场　农场　场面　场合
-5. <u>叔叔</u>　<u>雷锋</u>　<u>昨天</u>　<u>温暖</u>　<u>爱心</u>　刀锋　锋利　昨日　洒水　雷雨
-　　打雷　地雷　背后　背包　背带　汗水　出汗　温和　气温　暖冬
-　　暖阳　暖洋洋
-6. <u>也许</u>　<u>桌子</u>　<u>平时</u>　<u>难道</u>　<u>好奇</u>　<u>平常</u>　<u>加工</u>　<u>农民</u>　<u>农具</u>　<u>甜菜</u>
-　　<u>工具</u>　<u>劳动</u>　<u>经过</u>　<u>应该</u>　课桌　圆桌　收买　买通　具体　学具
-　　甘心　甘苦　甜味　清甜　香甜　品尝　尝鲜　白菜　菜园　辛劳
-　　代劳　应当　应用　答应　劳心劳力
-7. <u>弱小</u>　<u>周末</u>　<u>父母</u>　<u>吸引</u>　<u>芬芳</u>　<u>背包</u>　<u>雨衣</u>　<u>为什么</u>　<u>勇敢</u>　弱点
-　　色弱　本周　周日　年末　末路　母爱　母校　吸收　吸气　芬芳
-　　芳华　芳香　芳名　快递　递进　递送　勇气　勇士　敢问　不敢
-二　工程　路程　进程　学术　马术　手术　服务　衣服　服从　家务
-　　业务　劳务
-①　<u>神州</u>　<u>中华</u>　<u>山川</u>　<u>民族</u>　<u>长江</u>　<u>长城</u>　<u>情谊</u>　神情　神话　神气活现
-②　贴纸　贴画　街道　街头　大街　传递　传说　传奇　统一　总统
-　　艾草　敬爱　<u>转眼</u>　清扫　打扫　扫地　龙头　火龙　<u>龙舟</u>　全家
-　　全面　<u>团圆</u>　团体　真心　真情　认真　<u>节日</u>　<u>春节</u>　<u>花灯</u>　<u>先人</u>
-　　<u>中秋</u>　<u>传统</u>　<u>清明节</u>
-③　甲虫　甲鱼　马甲　骨头　骨气　<u>钱币</u>　金钱　外币　午觉　觉得
-　　财物　财产　<u>钱财</u>　相与　与其　采购　购买　品行　品格　作品
-　　品种　<u>样子</u>　<u>有关</u>　<u>故事</u>　<u>生活</u>　<u>甲骨文</u>　人民币
-④　食物　食品　<u>茄子</u>　烤鸡　烤火　烤电　<u>羊肉</u>　鸡蛋　蛋白　坏蛋
-　　米饭　<u>美食</u>　吃饭　早饭　鸭子　野鸭　<u>烤鸭</u>　鸡肉　公鸡　煮饭
-　　煮菜　<u>蛋炒饭</u>　<u>水煮鱼</u>
-三　辣手　辛辣　几乎　似乎　合乎　近乎　关乎　在乎　火辣辣
-8. <u>彩色</u>　做梦　美梦　<u>森林</u>　<u>雪松</u>　生硬　过硬　硬菜　铅字　宝盒
-　　森林　<u>苹果</u>　结果　打结　精神　<u>精灵</u>　精力　神灵　灵活　灵动
-　　流动　河流　流行　<u>歌声</u>　<u>季节</u>　<u>流动</u>　<u>铅笔盒</u>　活灵活现
-9.　马匹　<u>妹妹</u>　水波　波动　<u>波纹</u>　条纹　花纹　恋爱　恋情　恋家
-　　农舍　舍得　求知　求学　飞奔　奔向　奔跑　<u>出色</u>　<u>碧绿</u>　<u>柳树</u>
-　　<u>枝条</u>　<u>不时</u>　<u>恋恋不舍</u>
-10. 旁边　身旁　旁白　<u>阿姨</u>　小姨　<u>弟弟</u>　弟子　方便　便民　便利
-　　教书　教课　阿公　拼写　比拼　拼接　音乐　声音　话音　<u>绿色</u>
-　　<u>一直</u>　<u>说话</u>　<u>童话</u>　<u>拼音</u>　<u>字母</u>　<u>发明</u>　<u>发现</u>　<u>上升</u>
-四　平坦　坦克　夹克　克服　巧克力
-11. 死亡　灭亡　流亡　牢房　把牢　坐牢　劝说　<u>劝告</u>　丢失　丢脸
-12. 补助　补习　补课　补牙　助长　助力　助手　好坏　坏事　生死
-　　死活　<u>明白</u>　<u>禾苗</u>　<u>力气</u>　<u>亡羊补牢</u>
-　　室外　画室　家室　排骨　排队　排长　反而　而今　而后　果实
-　　现实　事实　气候　<u>时候</u>　候补　下班　夜班　晚班　<u>座位</u>　举行
-　　举动　举手　<u>神情</u>　<u>讲桌</u>　<u>教室</u>　<u>画纸</u>　<u>杨桃</u>　<u>图画</u>　笑哈哈
-　　<u>五角星</u>　<u>哈哈大笑</u>　<u>老老实实</u>
-13. 心愿　情愿　自愿　<u>愿意</u>　意思　意外　意见　麦子　麦苗　麦田
-　　<u>伯伯</u>　伯父　伯母　<u>立刻</u>　刻刀　时刻　<u>突然</u>　突出　然后　自然
-　　掉头　掉队　<u>飞快</u>　<u>为难</u>　<u>吃惊</u>　<u>认真</u>　<u>难为情</u>
-五　商品　商家　商人　大厦　商厦　广厦　空洞　地洞　洞穴　穴位
-14. 窗口　门窗　包含　含片　泊船　泊车　泊位　吴国　莲花　莲子
-　　莲心　干净　明净　净化　净身　映照　放映　反映　山岭　分水岭
-15. <u>雷雨</u>　<u>雷声</u>　<u>乌云</u>　乌黑　黑白　黑色　沉思　低沉　响亮　响动
-　　<u>清新</u>　新闻　新春　新年　欢迎　迎风　<u>迎面</u>　扑打　扑空　<u>窗户</u>
-　　<u>闪电</u>　<u>房子</u>　<u>黑沉沉</u>　扑面而来　一声不响
-16. 手指　指出　指导　<u>指点</u>　打针　针头　时针　分针　<u>帮助</u>　<u>帮忙</u>
-　　南方　南面　<u>向导</u>　领导　开导　劝导　<u>忠实</u>　忠告　<u>永远</u>　永别
-　　永久　<u>黑夜</u>　夜晚　夜空　过夜　<u>特别</u>　特产　特点　<u>积雪</u>　积木
-　　积分　<u>野外</u>　<u>天然</u>　<u>方向</u>　<u>北极星</u>　<u>指南针</u>　积少成多
-17. 航空　领航　航运　宇航　宇宙　或许　或是　或然　浴室　浴巾
-　　浴衣　<u>浴桶</u>　铁桶　油桶　饭桶　<u>活动</u>　<u>主要</u>　<u>方便</u>　<u>直接</u>　<u>清理</u>
-　　<u>实在</u>　<u>通常</u>　<u>航天员</u>　<u>空间站</u>　<u>宇宙飞船</u>
-六　饭馆　会馆　面馆　所以　住所　一无所有　所作所为
-18. <u>扇子</u>　风扇　电扇　慢车　快慢　<u>遇到</u>　奇遇　遇难　<u>一定</u>　定向
-19. <u>商店</u>　店长　店名　<u>决定</u>　对决　决战　需要　军需　支付　应付
-　　付出　<u>工夫</u>　夫人　大夫　<u>终于</u>　终点　终结　周期　日期　<u>星期</u>
-　　<u>河马</u>
-20. <u>青蛙</u>　蛙跳　牛蛙　卖力　外卖　搬家　搬运　倒车　倒立　倒挂
-　　<u>泉水</u>　泉眼　温泉　山泉　破坏　冲破　破产　砍树　砍刀　蛙泳
-　　冬泳　泳衣　<u>野鸭</u>　<u>花丛</u>　<u>尽情</u>　<u>游泳</u>　卖东西
-21. 仿照　仿真　仿写　<u>仿佛</u>　佛门　佛爷　<u>纺织</u>　纺线　织布　织女
-　　合并　并进　信任　就任　如何　为何　何时　<u>迟到</u>　迟早　<u>灵巧</u>
-　　<u>到处</u>　<u>怎样</u>　<u>目光</u>　<u>周游</u>　<u>以前</u>　<u>色彩</u>　<u>花纹</u>　<u>新奇</u>　<u>任何</u>　<u>事情</u>
-七　学校　校服　校外　校内　室内　屋内　内外
-22. 射手　发射　<u>最后</u>　最美　<u>开始</u>　始终　起始　更换　交换　转换
-　　<u>值日</u>　数值　净值　弓步　弓背　弓形　消炎　发炎　此刻　此事
-　　如此　<u>从此</u>　<u>光明</u>　<u>决心</u>　<u>欢唱</u>　<u>生机</u>
-23. <u>忽然</u>　忽视　忽闪　文件　物件　事件　启动　<u>启发</u>　开启　<u>号召</u>
-　　召见　群众　听众　<u>民众</u>　完全　完成　完结　却步　冷却　了却
-　　供应　供品　供需　<u>传说</u>　<u>首领</u>　<u>步行</u>　<u>搬运</u>　<u>自由</u>　<u>道理</u>　<u>根本</u>
-　　<u>果然</u>　<u>提供</u>　<u>便利</u>
-24. <u>洪水</u>　洪亮　<u>百姓</u>　姓名　皮带　<u>带领</u>　带鱼　灾难　水灾　火灾
-　　<u>必须</u>　必然　务必　须得　<u>仍然</u>　仍需　仍有　<u>继续</u>　继任　继位
-　　连续　续写　续航　作业　<u>农业</u>　事业　<u>痛苦</u>　<u>反而</u>　<u>治服</u>　<u>采用</u>
-　　<u>奔波</u>　<u>安居乐业</u>
-八　灿烂　烂果　破烂　金灿灿
-`;
-
+        const DEFAULT_VOCAB_DOCX = '（gwq编辑版）二年级下册词语表-可编辑版.docx';
         let hasCustomUpload = false;
 
-        // ==================== 解析文本内容（新逻辑）====================
+        // ==================== 解析文本内容（按单元范围）====================
         function parseVocabText(text) {
             const lines = text.split('\n').map(l => l.trim()).filter(l => l);
             const units = [];
             const rawWords = [];
-
-            // 暂存“尚未被单元标记确认”的内容；遇到“一/二/三...”时一次性归档到该单元
-            let pendingLessons = [];
-            let pendingPark = [];
-            let pendingGeneralWords = [];
+            let currentUnit = null;
             let currentLessonNum = null;
             let currentLessonWords = [];
+            let currentParkWords = [];
+            let collectingPark = false;
 
-            // 识别单元标记：独立的汉字数字（如"一"、"二"）
-            function isUnitMarker(line) {
-                return /^[一二三四五六七八九十]$/.test(line.trim());
+            function isUnitHeader(line) {
+                return /^第[一二三四五六七八九十\d]+单元[:：]?$/.test(line);
             }
-            // 识别课标记：数字+点/顿号/全角空格 如 "1." "②" "14、"
             function isLessonMarker(line) {
                 return /^\d+[\.、]\s*/.test(line) || /^[①②③④⑤⑥⑦⑧⑨⑩]\s*/.test(line);
             }
-            // 提取课号
+            function isParkHeader(line) {
+                return /^语文园地[一二三四五六七八九十\d]$/.test(line);
+            }
+            function isParkMarker(line) {
+                return /^[一二三四五六七八九十]\.\s*/.test(line);
+            }
             function extractLessonNum(line) {
-                const match = line.match(/^(\d+)[\.、]\s*/);
-                if (match) return parseInt(match[1]);
-                const circledMatch = line.match(/^([①②③④⑤⑥⑦⑧⑨⑩])\s*/);
-                if (circledMatch) {
-                    const circledNums = {'①':1,'②':2,'③':3,'④':4,'⑤':5,'⑥':6,'⑦':7,'⑧':8,'⑨':9,'⑩':10};
-                    return circledNums[circledMatch[1]];
+                const n = line.match(/^(\d+)[\.、]\s*/);
+                if (n) return parseInt(n[1], 10);
+                const c = line.match(/^([①②③④⑤⑥⑦⑧⑨⑩])\s*/);
+                if (c) {
+                    const map = { '①':1,'②':2,'③':3,'④':4,'⑤':5,'⑥':6,'⑦':7,'⑧':8,'⑨':9,'⑩':10 };
+                    return map[c[1]];
                 }
                 return null;
             }
-            // 提取课后的词语
             function extractLessonWords(line) {
-                const match = line.match(/^\d+[\.、]\s*(.*)$/);
-                if (match) return parseWordLine(match[1]);
-                const circledMatch = line.match(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*(.*)$/);
-                if (circledMatch) return parseWordLine(circledMatch[1]);
+                const n = line.match(/^\d+[\.、]\s*(.*)$/);
+                if (n) return parseWordLine(n[1]);
+                const c = line.match(/^[①②③④⑤⑥⑦⑧⑨⑩]\s*(.*)$/);
+                if (c) return parseWordLine(c[1]);
                 return [];
             }
-            // 识别语文园地标记：汉字+点 如 "一." "二."
-            function isParkMarker(line) {
-                return /^[一二三四五六七八九十]\.\s*/.test(line.trim());
+            function parseWordLine(lineText) {
+                const fullUnderline = lineText.match(/^<u>(.*?)<\/u>$/);
+                if (fullUnderline) {
+                    return fullUnderline[1].split(/[,，\s\u3000]+/).map(w => w.trim()).filter(Boolean).map(w => ({ text: w, underlined: true }));
+                }
+                const rawParts = lineText.split(/[,，\s\u3000]+/).map(w => w.trim()).filter(Boolean);
+                return rawParts.map(part => {
+                    const clean = part.replace(/<u>|<\/u>/g, '').replace(/^_+|_+$/g, '').trim();
+                    const underlined = part.includes('<u>') || part.includes('</u>') || (part.startsWith('_') && part.endsWith('_'));
+                    return { text: clean, underlined };
+                }).filter(w => w.text);
             }
-            // 提取园地号
-            function extractParkNum(line) {
-                const match = line.match(/^([一二三四五六七八九十])\.\s*/);
-                return match ? match[1] : null;
-            }
-            // 解析一行词语
-            function parseWordLine(text) {
-                // 检查整行是否被 <u> 包裹（如 <u>词1 词2 词3</u>）
-                const fullUnderlineMatch = text.match(/^<u>(.*?)<\/u>$/);
-                if (fullUnderlineMatch) {
-                    // 整行都在下划线中，按空格/逗号/全角空格分隔，每个词都标记为下划线
-                    return fullUnderlineMatch[1].split(/[,，\s\u3000]+/).map(w => w.trim()).filter(w => w && w.length >= 1).map(w => ({ text: w, underlined: true }));
-                }
-
-                const words = [];
-                // 先尝试匹配带下划线的词语 <u>xxx</u> 或 _xxx_
-                const underlineRegex = /<u>([^<]+)<\/u>|_([^_\s]+)_/g;
-                let match;
-                let lastIndex = 0;
-                while ((match = underlineRegex.exec(text)) !== null) {
-                    const word = match[1] || match[2];
-                    if (word) {
-                        words.push({ text: word.trim(), underlined: true });
-                    }
-                    lastIndex = underlineRegex.lastIndex;
-                }
-                // 如果没有下划线标记，按空格/逗号/全角空格分隔
-                if (words.length === 0) {
-                    return text.split(/[,，\s\u3000]+/).map(w => w.trim()).filter(w => w && w.length >= 1).map(w => ({ text: w, underlined: false }));
-                }
-                // 有下划线的情况，还需要补充没有下划线的普通词语（简化处理：全部按空格分）
-                const allParts = text.split(/[,，\s\u3000]+/).map(w => w.trim()).filter(w => w);
-                const result = [];
-                const seen = new Set();
-                for (const part of allParts) {
-                    // 去掉下划线标记
-                    const cleanWord = part.replace(/^[_<u>]+|[_<\/u>]+$/g, '').trim();
-                    if (cleanWord && !seen.has(cleanWord)) {
-                        seen.add(cleanWord);
-                        // 检查原始文本中是否包含下划线标记
-                        const hasUnderline = part.includes('<u>') || part.includes('</u>') || (part.startsWith('_') && part.endsWith('_'));
-                        result.push({ text: cleanWord, underlined: hasUnderline });
-                    }
-                }
-                return result;
-            }
-
-            function flushCurrentLesson() {
-                if (currentLessonNum !== null && currentLessonWords.length > 0) {
-                    pendingLessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
-                }
+            function flushLesson() {
+                if (!currentUnit || currentLessonNum === null || currentLessonWords.length === 0) return;
+                currentUnit.lessons.push({ num: currentLessonNum, words: [...currentLessonWords] });
+                for (const w of currentLessonWords) rawWords.push({ ...w, unit: currentUnit.name, lesson: currentLessonNum });
                 currentLessonNum = null;
                 currentLessonWords = [];
             }
-
-            function appendPendingToUnit(unit) {
-                for (const lesson of pendingLessons) {
-                    unit.lessons.push({ num: lesson.num, words: [...lesson.words] });
-                    for (const w of lesson.words) {
-                        rawWords.push({ ...w, unit: unit.name, lesson: lesson.num });
-                    }
-                }
-                for (const w of pendingPark) {
-                    unit.park.push(w);
-                    rawWords.push({ ...w, unit: unit.name, lesson: null, isPark: true });
-                }
-                for (const w of pendingGeneralWords) {
-                    rawWords.push({ ...w, unit: unit.name, lesson: null });
-                }
-
+            function flushPark() {
+                if (!currentUnit || currentParkWords.length === 0) return;
+                currentUnit.park = currentUnit.park.concat(currentParkWords);
+                for (const w of currentParkWords) rawWords.push({ ...w, unit: currentUnit.name, lesson: null, isPark: true });
+                currentParkWords = [];
+                collectingPark = false;
+            }
+            function finalizeUnit() {
+                if (!currentUnit) return;
+                flushLesson();
+                flushPark();
                 const seen = new Set();
-                unit.allWords = [];
-                for (const lesson of unit.lessons) {
+                const unitGeneralWords = rawWords.filter(w => w.unit === currentUnit.name && w.lesson === null && !w.isPark);
+                currentUnit.allWords = [];
+                for (const lesson of currentUnit.lessons) {
                     for (const w of lesson.words) {
-                        if (!seen.has(w.text)) {
-                            seen.add(w.text);
-                            unit.allWords.push(w);
-                        }
+                        if (!seen.has(w.text)) { seen.add(w.text); currentUnit.allWords.push(w); }
                     }
                 }
-                for (const w of unit.park) {
-                    if (!seen.has(w.text)) {
-                        seen.add(w.text);
-                        unit.allWords.push(w);
-                    }
+                for (const w of currentUnit.park) {
+                    if (!seen.has(w.text)) { seen.add(w.text); currentUnit.allWords.push(w); }
                 }
-                for (const w of pendingGeneralWords) {
-                    if (!seen.has(w.text)) {
-                        seen.add(w.text);
-                        unit.allWords.push(w);
-                    }
+                for (const w of unitGeneralWords) {
+                    if (!seen.has(w.text)) { seen.add(w.text); currentUnit.allWords.push(w); }
                 }
-
-                pendingLessons = [];
-                pendingPark = [];
-                pendingGeneralWords = [];
+            }
+            function ensureFallbackUnit() {
+                if (!currentUnit) {
+                    currentUnit = { name: '第一单元', marker: '一', lessons: [], park: [], allWords: [] };
+                    units.push(currentUnit);
+                }
             }
 
-            function commitUnitByMarker(marker) {
-                flushCurrentLesson();
-                const unit = {
-                    name: marker + '单元',
-                    marker,
-                    lessons: [],
-                    park: [],
-                    allWords: []
-                };
-                appendPendingToUnit(unit);
-                units.push(unit);
-            }
-
-            let i = 0;
-            while (i < lines.length) {
+            for (let i = 0; i < lines.length; i++) {
                 const line = lines[i];
-
-                if (/^识字\d+$/.test(line) || /^第[一二三四五六七八九十\d]+单元$/.test(line) || /^语文园地[一二三四五六七八九十]$/.test(line)) {
-                    i++;
+                if (isUnitHeader(line)) {
+                    finalizeUnit();
+                    const markerMatch = line.match(/^第([一二三四五六七八九十\d]+)单元/);
+                    const markerText = markerMatch ? markerMatch[1] : '';
+                    currentUnit = { name: `第${markerText}单元`, marker: markerText, lessons: [], park: [], allWords: [] };
+                    units.push(currentUnit);
+                    currentLessonNum = null;
+                    currentLessonWords = [];
+                    currentParkWords = [];
+                    collectingPark = false;
                     continue;
                 }
 
-                // 关键规则：单元标记（如"一"）出现时，把上方累计内容归入该单元
-                if (isUnitMarker(line)) {
-                    commitUnitByMarker(line);
-                    i++;
+                if (isParkHeader(line)) {
+                    flushLesson();
+                    collectingPark = true;
                     continue;
                 }
-
+                if (isParkMarker(line)) {
+                    collectingPark = true;
+                    const inline = line.replace(/^[一二三四五六七八九十]\.\s*/, '').trim();
+                    if (inline) currentParkWords = currentParkWords.concat(parseWordLine(inline));
+                    continue;
+                }
                 if (isLessonMarker(line)) {
-                    flushCurrentLesson();
+                    ensureFallbackUnit();
+                    flushLesson();
+                    if (collectingPark) flushPark();
                     currentLessonNum = extractLessonNum(line);
                     currentLessonWords = extractLessonWords(line);
-                    i++;
                     continue;
                 }
+                if (/^识字\d+$/.test(line) || /^二年级下册词语表/.test(line)) continue;
 
-                if (isParkMarker(line)) {
-                    flushCurrentLesson();
-                    const parkWordsText = line.replace(/^[一二三四五六七八九十]\.\s*/, '').trim();
-                    let parkWords = parkWordsText ? parseWordLine(parkWordsText) : [];
-                    i++;
-                    while (i < lines.length) {
-                        const nextLine = lines[i];
-                        if (isUnitMarker(nextLine) || isLessonMarker(nextLine) || isParkMarker(nextLine) || /^识字\d+$/.test(nextLine) || /^语文园地/.test(nextLine)) {
-                            break;
-                        }
-                        parkWords = parkWords.concat(parseWordLine(nextLine));
-                        i++;
-                    }
-                    pendingPark = pendingPark.concat(parkWords);
-                    continue;
-                }
-
-                const words = parseWordLine(line);
-                if (words.length > 0) {
-                    if (currentLessonNum !== null) {
-                        currentLessonWords = currentLessonWords.concat(words);
-                    } else {
-                        pendingGeneralWords = pendingGeneralWords.concat(words);
-                    }
-                }
-                i++;
-            }
-
-            flushCurrentLesson();
-            if (pendingLessons.length > 0 || pendingPark.length > 0 || pendingGeneralWords.length > 0) {
-                if (units.length === 0) {
-                    // 兜底：未识别到单元标记时，仍生成一个默认单元
-                    commitUnitByMarker('一');
+                const wordsInLine = parseWordLine(line);
+                if (wordsInLine.length === 0) continue;
+                ensureFallbackUnit();
+                if (collectingPark) {
+                    currentParkWords = currentParkWords.concat(wordsInLine);
+                } else if (currentLessonNum !== null) {
+                    currentLessonWords = currentLessonWords.concat(wordsInLine);
                 } else {
-                    // 兼容“单元标记在上方”的文件格式：把尾部内容并到最后一个单元
-                    appendPendingToUnit(units[units.length - 1]);
+                    for (const w of wordsInLine) rawWords.push({ ...w, unit: currentUnit.name, lesson: null });
                 }
             }
-
+            finalizeUnit();
             return { units, rawWords };
         }
 
@@ -1245,6 +1104,10 @@
                 reader.readAsArrayBuffer(file);
             });
         }
+        async function parseWordArrayBuffer(buffer) {
+            const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+            return result.value;
+        }
         async function parsePdfFile(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -1308,20 +1171,24 @@
             }
         }
 
-        function loadDefaultData() {
-            if (!hasCustomUpload) {
-                const data = parseVocabText(defaultRawText);
+        async function loadDefaultData() {
+            if (hasCustomUpload) return;
+            try {
+                const resp = await fetch(encodeURI(DEFAULT_VOCAB_DOCX));
+                if (!resp.ok) throw new Error('默认词语表文件加载失败');
+                const content = await parseWordArrayBuffer(await resp.arrayBuffer());
+                const data = parseVocabText(content);
                 buildVocabFromData(data);
                 const uniqueWords = new Set(data.rawWords.map(w => w.text)).size;
                 showDictationStatus(`✅ 已加载默认词语表：${data.units.length}个单元，${uniqueWords}个词语`, 'success');
+            } catch (err) {
+                console.error(err);
+                showDictationStatus('⚠️ 默认词语表加载失败，请手动上传文档', 'error');
             }
         }
 
-        function loadSampleData() {
-            const data = parseVocabText(defaultRawText);
-            buildVocabFromData(data);
-            const uniqueWords = new Set(data.rawWords.map(w => w.text)).size;
-            showDictationStatus(`✅ 已加载示例数据：${data.units.length}个单元，${uniqueWords}个词语`, 'success');
+        async function loadSampleData() {
+            await loadDefaultData();
         }
 
         // ==================== 语音指令解析 ====================
@@ -1652,15 +1519,13 @@
         }
 
         // ==================== 语音识别 ====================
-        function startVoiceCommand() {
-            // 先检查是否有数据
+        let holdTranscript = '';
+        function startVoiceCommandPress() {
             if (!vocabData || vocabData.units.length === 0) {
                 showDictationStatus('⚠️ 请先上传词语表或点击「使用示例数据」再使用语音功能', 'error');
-                // 显示手动输入作为备选
                 showManualCommandInput();
                 return;
             }
-
             if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
                 showDictationStatus('⚠️ 浏览器不支持语音识别，请使用手动输入', 'error');
                 showManualCommandInput();
@@ -1668,46 +1533,49 @@
             }
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             recognition = new SpeechRecognition();
-            recognition.lang = 'zh-CN'; recognition.continuous = false; recognition.interimResults = false;
+            recognition.lang = 'zh-CN';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            holdTranscript = '';
             const btn = document.getElementById('voiceCommandBtn');
-            btn.classList.add('listening'); btn.innerHTML = '🎤 正在听...';
-            
-            let hasResult = false;
-            
+            btn.classList.add('listening');
+            btn.innerHTML = '🎤 松开结束';
+
             recognition.onresult = (event) => {
-                hasResult = true;
-                const transcript = event.results[0][0].transcript;
-                processVoiceCommand(transcript);
-                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
-            };
-            
-            recognition.onerror = (event) => {
-                console.error('语音识别错误:', event.error);
-                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
-                // 只有当确实没有识别到结果时才报错
-                if (!hasResult) {
-                    showDictationStatus('⚠️ 没听清，请重试或手动输入', 'error');
-                    showManualCommandInput();
+                let transcript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    transcript += event.results[i][0].transcript;
                 }
+                holdTranscript = transcript.trim();
             };
-            
+            recognition.onerror = () => {
+                btn.classList.remove('listening');
+                btn.innerHTML = '🎤 按住说要求';
+            };
             recognition.onend = () => {
-                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
-                // 如果一直没有结果，提示用户
-                if (!hasResult) {
-                    showDictationStatus('⚠️ 请再试一次，或点击下方手动选择', 'info');
-                    showManualCommandInput();
-                }
+                btn.classList.remove('listening');
+                btn.innerHTML = '🎤 按住说要求';
             };
-            
             try {
                 recognition.start();
             } catch (e) {
                 console.error('语音识别启动失败:', e);
-                btn.classList.remove('listening'); btn.innerHTML = '🎤 说要求';
+                btn.classList.remove('listening');
+                btn.innerHTML = '🎤 按住说要求';
                 showDictationStatus('⚠️ 语音启动失败，请手动输入', 'error');
-                showManualCommandInput();
             }
+        }
+        function endVoiceCommandPress() {
+            if (!recognition) return;
+            recognition.stop();
+            const transcript = holdTranscript.trim();
+            holdTranscript = '';
+            if (!transcript) {
+                showDictationStatus('⚠️ 没听清，请按住重试', 'info');
+                showManualCommandInput();
+                return;
+            }
+            processVoiceCommand(transcript);
         }
 
         // ==================== 报听写流程 ====================
@@ -1897,8 +1765,16 @@
         }
 
         // 页面加载时自动加载默认词语表（如果用户未上传自定义文件）
-        window.addEventListener('DOMContentLoaded', () => {
-            loadDefaultData();
+        window.addEventListener('DOMContentLoaded', async () => {
+            document.body.classList.add('app-ready');
+            const voiceBtn = document.getElementById('voiceCommandBtn');
+            const startPress = (e) => { e.preventDefault(); startVoiceCommandPress(); };
+            const endPress = (e) => { e.preventDefault(); endVoiceCommandPress(); };
+            voiceBtn.addEventListener('pointerdown', startPress);
+            voiceBtn.addEventListener('pointerup', endPress);
+            voiceBtn.addEventListener('pointercancel', endPress);
+            voiceBtn.addEventListener('pointerleave', endPress);
+            await loadDefaultData();
         });
     </script>
 </body>
