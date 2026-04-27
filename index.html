@@ -23,6 +23,12 @@
             touch-action: manipulation;
             -webkit-tap-highlight-color: transparent;
         }
+        #voiceCommandBtn, #voiceCommandBtn * {
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-user-drag: none;
+        }
         .container {
             max-width: 600px;
             margin: 0 auto;
@@ -1770,10 +1776,15 @@
             const voiceBtn = document.getElementById('voiceCommandBtn');
             const startPress = (e) => { e.preventDefault(); startVoiceCommandPress(); };
             const endPress = (e) => { e.preventDefault(); endVoiceCommandPress(); };
+            const blockContext = (e) => e.preventDefault();
             voiceBtn.addEventListener('pointerdown', startPress);
             voiceBtn.addEventListener('pointerup', endPress);
             voiceBtn.addEventListener('pointercancel', endPress);
             voiceBtn.addEventListener('pointerleave', endPress);
+            voiceBtn.addEventListener('touchstart', startPress, { passive: false });
+            voiceBtn.addEventListener('touchend', endPress, { passive: false });
+            voiceBtn.addEventListener('touchcancel', endPress, { passive: false });
+            voiceBtn.addEventListener('contextmenu', blockContext);
             await loadDefaultData();
         });
     </script>
