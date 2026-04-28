@@ -28,6 +28,12 @@
             -webkit-user-select: none;
             -webkit-touch-callout: none;
             -webkit-user-drag: none;
+            caret-color: transparent;
+        }
+        .voice-pressing, .voice-pressing * {
+            user-select: none !important;
+            -webkit-user-select: none !important;
+            -webkit-touch-callout: none !important;
         }
         .container {
             max-width: 600px;
@@ -1239,9 +1245,9 @@
             // 更新指令显示
             let desc = '';
             if (result.type === 'unit_range') {
-                desc = `报${result.startUnit}到${result.endUnit}，共${selectedWords.length}词，分${dictationGroups.length}组`;
+                desc = `报${result.startUnit.name}到${result.endUnit.name}，共${selectedWords.length}词，分${dictationGroups.length}组`;
             } else if (result.type === 'single_unit') {
-                desc = `报${result.unit}，共${selectedWords.length}词，分${dictationGroups.length}组`;
+                desc = `报${result.unit.name}，共${selectedWords.length}词，分${dictationGroups.length}组`;
             } else if (result.type === 'lesson') {
                 desc = `报第${result.lessonNum}课，共${selectedWords.length}词，分${dictationGroups.length}组`;
             } else if (result.type === 'park') {
@@ -1526,6 +1532,7 @@
 
         // ==================== 语音识别 ====================
         let holdTranscript = '';
+        let isVoicePressing = false;
         function startVoiceCommandPress() {
             if (!vocabData || vocabData.units.length === 0) {
                 showDictationStatus('⚠️ 请先上传词语表或点击「使用示例数据」再使用语音功能', 'error');
@@ -1599,7 +1606,6 @@
             const display = document.getElementById('dictationDisplay');
             display.style.display = 'flex';
 
-            startContinuousListening();
 
             let countdown = 5;
             const roundEl = document.getElementById('dictationRound');
@@ -1614,10 +1620,21 @@
                 wordEl.textContent = countdown > 0 ? countdown : '开始听写！';
                 if (countdown <= 0) {
                     clearInterval(preTimer);
-                    setTimeout(() => speakNextGroup(), 800);
+                    speakStartPromptThenNextGroup();
                 }
             }, 1000);
             dictationTimer = preTimer;
+        }
+
+        function speakStartPromptThenNextGroup() {
+            if (!isDictating) return;
+            const startUtterance = new SpeechSynthesisUtterance('开始听写');
+            startUtterance.lang = 'zh-CN';
+            startUtterance.rate = 0.9;
+            startUtterance.pitch = 1;
+            startUtterance.onend = () => setTimeout(() => speakNextGroup(), 250);
+            startUtterance.onerror = () => setTimeout(() => speakNextGroup(), 250);
+            speechSynthesis.speak(startUtterance);
         }
 
         function speakNextGroup() {
@@ -1737,24 +1754,7 @@
             }, 4000);
         }
 
-        // 持续监听"下一组"
-        function startContinuousListening() {
-            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.lang = 'zh-CN'; recognition.continuous = true; recognition.interimResults = false;
-            recognition.onresult = (event) => {
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-                    if (transcript.includes('下一组') || transcript.includes('跳过') || transcript.includes('下一')) {
-                        skipGroup();
-                    }
-                }
-            };
-            recognition.onerror = () => { if (isDictating) setTimeout(() => startContinuousListening(), 1000); };
-            recognition.onend = () => { if (isDictating) setTimeout(() => startContinuousListening(), 500); };
-            try { recognition.start(); } catch (e) { console.error('语音识别启动失败:', e); }
-        }
+        // 麦克风仅在按住“按住说要求”时使用，不在听写流程中持续占用
 
         function showDictationStatus(msg, type) {
             const statusDiv = document.getElementById('dictationStatus');
@@ -1774,9 +1774,26 @@
         window.addEventListener('DOMContentLoaded', async () => {
             document.body.classList.add('app-ready');
             const voiceBtn = document.getElementById('voiceCommandBtn');
-            const startPress = (e) => { e.preventDefault(); startVoiceCommandPress(); };
-            const endPress = (e) => { e.preventDefault(); endVoiceCommandPress(); };
-            const blockContext = (e) => e.preventDefault();
+            const startPress = (e) => {
+                e.preventDefault();
+                if (isVoicePressing) return;
+                isVoicePressing = true;
+                document.body.classList.add('voice-pressing');
+                window.getSelection()?.removeAllRanges();
+                startVoiceCommandPress();
+            };
+            const endPress = (e) => {
+                e.preventDefault();
+                if (!isVoicePressing) return;
+                isVoicePressing = false;
+                document.body.classList.remove('voice-pressing');
+                window.getSelection()?.removeAllRanges();
+                endVoiceCommandPress();
+            };
+            const blockContext = (e) => {
+                e.preventDefault();
+                window.getSelection()?.removeAllRanges();
+            };
             voiceBtn.addEventListener('pointerdown', startPress);
             voiceBtn.addEventListener('pointerup', endPress);
             voiceBtn.addEventListener('pointercancel', endPress);
@@ -1785,6 +1802,20 @@
             voiceBtn.addEventListener('touchend', endPress, { passive: false });
             voiceBtn.addEventListener('touchcancel', endPress, { passive: false });
             voiceBtn.addEventListener('contextmenu', blockContext);
+            voiceBtn.addEventListener('selectstart', blockContext);
+            voiceBtn.addEventListener('dragstart', blockContext);
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    if (recognition) {
+                        try { recognition.stop(); } catch (_) {}
+                    }
+                    isVoicePressing = false;
+                    holdTranscript = '';
+                    document.body.classList.remove('voice-pressing');
+                    voiceBtn.classList.remove('listening');
+                    voiceBtn.innerHTML = '🎤 按住说要求';
+                }
+            });
             await loadDefaultData();
         });
     </script>
