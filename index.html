@@ -888,6 +888,7 @@
         const PAUSE_FIRST_TO_SECOND = 10;  // 第一遍到第二遍等待10秒
         const PAUSE_SECOND_TO_NEXT = 50;  // 第二遍到下一组等待50秒
         const WORDS_PER_LESSON_MIN = 30;  // 不足30个词则全部报完
+        const CHINESE_NUM_MAP = { '零':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10 };
 
         // ==================== 默认词语表数据（二年级下册 - 可编辑版）====================
         const DEFAULT_VOCAB_DOCX = '（gwq编辑-核对版）二年级下册词语表-可编辑版.docx';
@@ -1264,6 +1265,18 @@
         function parseCommand(text) {
             const result = { count: DEFAULT_WORD_COUNT, groupSize: GROUP_SIZE };
             const lower = text.toLowerCase();
+            const parseCnNumber = (raw) => {
+                if (!raw) return null;
+                if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+                if (raw === '十') return 10;
+                if (raw.startsWith('十')) return 10 + (CHINESE_NUM_MAP[raw[1]] || 0);
+                if (raw.endsWith('十')) return (CHINESE_NUM_MAP[raw[0]] || 0) * 10;
+                if (raw.includes('十')) {
+                    const [a, b] = raw.split('十');
+                    return (CHINESE_NUM_MAP[a] || 0) * 10 + (CHINESE_NUM_MAP[b] || 0);
+                }
+                return CHINESE_NUM_MAP[raw] ?? null;
+            };
 
             // 提取数量
             const countMatch = text.match(/(\d+)[个]?[词字]/);
@@ -1286,7 +1299,45 @@
                 return { success: true, type: 'park', parkName, unit: targetUnit, count: result.count };
             }
 
-            // 2. 检查单元范围 "第一单元到第三单元" / "第一单元至第三单元"
+            // 2. 优先检查课范围 "第3课到第5课" / "第三课到第五课"
+            const lessonRangeMatch = text.match(/第([一二三四五六七八九十两\d]+)[课課][到至~](第)?([一二三四五六七八九十两\d]+)[课課]/);
+            if (lessonRangeMatch) {
+                const startLessonNum = parseCnNumber(lessonRangeMatch[1]);
+                const endLessonNum = parseCnNumber(lessonRangeMatch[3]);
+                if (!startLessonNum || !endLessonNum) {
+                    return { success: false, error: '课范围识别失败，请重试' };
+                }
+                const start = Math.min(startLessonNum, endLessonNum);
+                const end = Math.max(startLessonNum, endLessonNum);
+                if (start > end) {
+                    return { success: false, error: '课范围有误，请从小到大说，如“第3课到第5课”' };
+                }
+                const lessonsInRange = [];
+                for (const unit of vocabData.units) {
+                    for (const lesson of unit.lessons) {
+                        if (lesson.num >= start && lesson.num <= end) {
+                            lessonsInRange.push({ unit, lesson });
+                        }
+                    }
+                }
+                if (lessonsInRange.length === 0) {
+                    return { success: false, error: `未找到第${start}课到第${end}课` };
+                }
+                return { success: true, type: 'lesson_range', startLessonNum: start, endLessonNum: end, lessonsInRange, count: result.count };
+            }
+
+            // 3. 检查单课 "第8课" / "第八课"
+            const lessonMatch = text.match(/第([一二三四五六七八九十两\d]+)[课課]/);
+            if (lessonMatch) {
+                const lessonNum = parseCnNumber(lessonMatch[1]);
+                if (!lessonNum) return { success: false, error: '课号识别失败，请重试' };
+                // 找到包含该课的单元
+                const unit = vocabData.units.find(u => u.lessons.some(l => l.num === lessonNum));
+                if (!unit) return { success: false, error: '未找到第' + lessonNum + '课（请确认该课存在于当前词语表中）' };
+                return { success: true, type: 'lesson', lessonNum, unit, count: result.count };
+            }
+
+            // 4. 检查单元范围 "第一单元到第三单元" / "第一单元至第三单元"
             const unitRangeMatch = text.match(/第([一二三四五六七八九十\d]+)单元[到至~](第)?([一二三四五六七八九十\d]+)单元/);
             if (unitRangeMatch) {
                 const start = unitRangeMatch[1];
@@ -1298,7 +1349,7 @@
                 return { success: true, type: 'unit_range', startUnit, endUnit, count: result.count };
             }
 
-            // 3. 检查单个单元 "第一单元" / "第二单元"
+            // 5. 检查单个单元 "第一单元" / "第二单元"
             const singleUnitMatch = text.match(/第([一二三四五六七八九十\d]+)单元/);
             if (singleUnitMatch) {
                 const num = singleUnitMatch[1];
@@ -1308,38 +1359,6 @@
                     return { success: false, error: '未找到第' + num + '单元（当前可用：' + available + '）' };
                 }
                 return { success: true, type: 'single_unit', unit, count: result.count };
-            }
-
-            // 4. 检查课范围 "第3课到第5课"
-            const lessonRangeMatch = text.match(/第(\d+)[课課][到至~](第)?(\d+)[课課]/);
-            if (lessonRangeMatch) {
-                const startLessonNum = parseInt(lessonRangeMatch[1], 10);
-                const endLessonNum = parseInt(lessonRangeMatch[3], 10);
-                if (startLessonNum > endLessonNum) {
-                    return { success: false, error: '课范围有误，请从小到大说，如“第3课到第5课”' };
-                }
-                const lessonsInRange = [];
-                for (const unit of vocabData.units) {
-                    for (const lesson of unit.lessons) {
-                        if (lesson.num >= startLessonNum && lesson.num <= endLessonNum) {
-                            lessonsInRange.push({ unit, lesson });
-                        }
-                    }
-                }
-                if (lessonsInRange.length === 0) {
-                    return { success: false, error: `未找到第${startLessonNum}课到第${endLessonNum}课` };
-                }
-                return { success: true, type: 'lesson_range', startLessonNum, endLessonNum, lessonsInRange, count: result.count };
-            }
-
-            // 5. 检查课 "第8课" / "第3课"
-            const lessonMatch = text.match(/第(\d+)[课課]/);
-            if (lessonMatch) {
-                const lessonNum = parseInt(lessonMatch[1]);
-                // 找到包含该课的单元
-                const unit = vocabData.units.find(u => u.lessons.some(l => l.num === lessonNum));
-                if (!unit) return { success: false, error: '未找到第' + lessonNum + '课（请确认该课存在于当前词语表中）' };
-                return { success: true, type: 'lesson', lessonNum, unit, count: result.count };
             }
 
             // 6. 模糊匹配：只说了"报词语"，默认全范围
@@ -1743,6 +1762,8 @@
                 finishDictation();
                 return;
             }
+            // 朗读期间关闭语音监听，避免 Safari 下抢占音频导致无声
+            stopDictationListening();
             const group = dictationGroups[currentGroupIndex];
             const roundEl = document.getElementById('dictationRound');
             const wordEl = document.getElementById('dictationWord');
@@ -1755,6 +1776,7 @@
             let wordIndex = 0;
             function speakFirstRound() {
                 if (wordIndex >= group.length || !isDictating) return;
+                timerEl.textContent = `第一遍 ${wordIndex + 1}/${group.length}`;
                 const utterance = new SpeechSynthesisUtterance(group[wordIndex]);
                 utterance.lang = 'zh-CN'; utterance.rate = 0.8; utterance.pitch = 1;
                 utterance.onend = () => {
@@ -1764,6 +1786,7 @@
                     } else {
                         // 第一遍读完，等待 PAUSE_FIRST_TO_SECOND 秒念第二遍
                         let waitCount = PAUSE_FIRST_TO_SECOND;
+                        startDictationListening();
                         timerEl.textContent = `${waitCount}秒后第二遍...`;
                         countdownTimer = setInterval(() => {
                             if (!isDictating) { clearInterval(countdownTimer); return; }
@@ -1771,6 +1794,7 @@
                             timerEl.textContent = waitCount > 0 ? `${waitCount}秒后第二遍...` : '第二遍';
                             if (waitCount <= 0) {
                                 clearInterval(countdownTimer);
+                                stopDictationListening();
                                 wordIndex = 0;
                                 setTimeout(() => speakSecondRound(), 600);
                             }
@@ -1782,6 +1806,7 @@
 
             function speakSecondRound() {
                 if (wordIndex >= group.length || !isDictating) return;
+                timerEl.textContent = `第二遍 ${wordIndex + 1}/${group.length}`;
                 const utterance = new SpeechSynthesisUtterance(group[wordIndex]);
                 utterance.lang = 'zh-CN'; utterance.rate = 0.8; utterance.pitch = 1;
                 utterance.onend = () => {
@@ -1791,6 +1816,7 @@
                     } else {
                         // 第二遍读完，等待 PAUSE_SECOND_TO_NEXT 秒下一组
                         let waitCount = PAUSE_SECOND_TO_NEXT;
+                        startDictationListening();
                         timerEl.textContent = `${waitCount}秒后下一组...`;
                         countdownTimer = setInterval(() => {
                             if (!isDictating) { clearInterval(countdownTimer); return; }
@@ -1798,6 +1824,7 @@
                             timerEl.textContent = waitCount > 0 ? `${waitCount}秒后下一组...` : '下一组';
                             if (waitCount <= 0) {
                                 clearInterval(countdownTimer);
+                                stopDictationListening();
                                 currentGroupIndex++;
                                 speakNextGroup();
                             }
