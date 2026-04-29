@@ -1580,6 +1580,8 @@
         // ==================== 语音识别 ====================
         let holdTranscript = '';
         let isVoicePressing = false;
+        let dictationSessionId = 0;
+        let skipRequested = false;
         function startVoiceCommandPress() {
             if (!vocabData || vocabData.units.length === 0) {
                 showDictationStatus('⚠️ 请先上传词语表或点击「使用示例数据」再使用语音功能', 'error');
@@ -1682,6 +1684,106 @@
             }
         }
 
+        function speakText(text, sessionId, rate = 0.8) {
+            return new Promise((resolve) => {
+                if (!isDictating || sessionId !== dictationSessionId) return resolve(false);
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'zh-CN';
+                utterance.rate = rate;
+                utterance.pitch = 1;
+                let finished = false;
+                const fallback = setTimeout(() => {
+                    if (finished) return;
+                    finished = true;
+                    resolve(false);
+                }, 4500);
+                const done = (ok) => {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(fallback);
+                    resolve(ok);
+                };
+                utterance.onend = () => done(true);
+                utterance.onerror = () => done(false);
+                try {
+                    speechSynthesis.speak(utterance);
+                } catch (e) {
+                    console.error('语音播报失败:', e);
+                    done(false);
+                }
+            });
+        }
+
+        async function waitCountdown(seconds, label, sessionId) {
+            const timerEl = document.getElementById('dictationTimer');
+            startDictationListening();
+            for (let t = seconds; t > 0; t--) {
+                if (!isDictating || sessionId !== dictationSessionId || skipRequested) {
+                    stopDictationListening();
+                    return false;
+                }
+                timerEl.textContent = `${t}秒后${label}...`;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+            stopDictationListening();
+            return !skipRequested && isDictating && sessionId === dictationSessionId;
+        }
+
+        async function runCurrentGroup(sessionId) {
+            if (!isDictating || sessionId !== dictationSessionId) return;
+            if (currentGroupIndex >= dictationGroups.length) {
+                finishDictation();
+                return;
+            }
+            skipRequested = false;
+            const group = dictationGroups[currentGroupIndex];
+            const roundEl = document.getElementById('dictationRound');
+            const wordEl = document.getElementById('dictationWord');
+            const timerEl = document.getElementById('dictationTimer');
+
+            roundEl.textContent = `第 ${currentGroupIndex + 1} / ${dictationGroups.length} 组`;
+            wordEl.textContent = group.join('  ');
+            timerEl.textContent = '第一遍';
+            stopDictationListening();
+
+            for (let i = 0; i < group.length; i++) {
+                if (!isDictating || sessionId !== dictationSessionId || skipRequested) break;
+                timerEl.textContent = `第一遍 ${i + 1}/${group.length}`;
+                await speakText(group[i], sessionId, 0.8);
+                await new Promise(r => setTimeout(r, 450));
+            }
+
+            if (skipRequested) return moveToNextGroup(sessionId);
+            if (!await waitCountdown(PAUSE_FIRST_TO_SECOND, '第二遍', sessionId)) return moveToNextGroup(sessionId);
+
+            timerEl.textContent = '第二遍';
+            for (let i = 0; i < group.length; i++) {
+                if (!isDictating || sessionId !== dictationSessionId || skipRequested) break;
+                timerEl.textContent = `第二遍 ${i + 1}/${group.length}`;
+                await speakText(group[i], sessionId, 0.8);
+                await new Promise(r => setTimeout(r, 450));
+            }
+
+            if (skipRequested) return moveToNextGroup(sessionId);
+            if (!await waitCountdown(PAUSE_SECOND_TO_NEXT, '下一组', sessionId)) return moveToNextGroup(sessionId);
+
+            currentGroupIndex++;
+            runCurrentGroup(sessionId);
+        }
+
+        function moveToNextGroup(sessionId) {
+            if (!isDictating || sessionId !== dictationSessionId) return;
+            skipRequested = false;
+            stopDictationListening();
+            speechSynthesis.cancel();
+            currentGroupIndex++;
+            if (currentGroupIndex >= dictationGroups.length) {
+                finishDictation();
+            } else {
+                setTimeout(() => runCurrentGroup(sessionId), 120);
+            }
+        }
+
         // ==================== 报听写流程 ====================
         function startDictation() {
             if (dictationGroups.length === 0) {
@@ -1691,13 +1793,14 @@
             unlockSpeechSynthesis();
             isDictating = true;
             currentGroupIndex = 0;
+            skipRequested = false;
+            dictationSessionId++;
 
             document.getElementById('startDictationBtn').disabled = true;
             document.getElementById('dictationControlsRow').style.display = 'flex';
 
             const display = document.getElementById('dictationDisplay');
             display.style.display = 'flex';
-
 
             let countdown = 5;
             const roundEl = document.getElementById('dictationRound');
@@ -1707,150 +1810,36 @@
             wordEl.textContent = countdown;
             timerEl.textContent = '';
 
-            const preTimer = setInterval(() => {
+            const sessionId = dictationSessionId;
+            const preTimer = setInterval(async () => {
                 countdown--;
                 wordEl.textContent = countdown > 0 ? countdown : '开始听写！';
                 if (countdown <= 0) {
                     clearInterval(preTimer);
-                    speakStartPromptThenNextGroup();
+                    if (!isDictating || sessionId !== dictationSessionId) return;
+                    roundEl.textContent = '开始听写';
+                    wordEl.textContent = '开始听写';
+                    timerEl.textContent = '';
+                    await speakText('开始听写', sessionId, 0.9);
+                    if (!isDictating || sessionId !== dictationSessionId) return;
+                    setTimeout(() => runCurrentGroup(sessionId), 180);
                 }
             }, 1000);
             dictationTimer = preTimer;
         }
 
-        function speakStartPromptThenNextGroup() {
-            if (!isDictating) return;
-            const roundEl = document.getElementById('dictationRound');
-            const wordEl = document.getElementById('dictationWord');
-            const timerEl = document.getElementById('dictationTimer');
-            roundEl.textContent = '开始听写';
-            wordEl.textContent = '开始听写';
-            timerEl.textContent = '';
-
-            let proceeded = false;
-            const proceedToFirstGroup = () => {
-                if (proceeded || !isDictating) return;
-                proceeded = true;
-                startDictationListening();
-                setTimeout(() => speakNextGroup(), 200);
-            };
-            const fallbackTimer = setTimeout(proceedToFirstGroup, 1600);
-
-            const startUtterance = new SpeechSynthesisUtterance('开始听写');
-            startUtterance.lang = 'zh-CN';
-            startUtterance.rate = 0.9;
-            startUtterance.pitch = 1;
-            startUtterance.onend = () => {
-                clearTimeout(fallbackTimer);
-                proceedToFirstGroup();
-            };
-            startUtterance.onerror = () => {
-                clearTimeout(fallbackTimer);
-                proceedToFirstGroup();
-            };
-            try {
-                speechSynthesis.speak(startUtterance);
-            } catch (e) {
-                console.error('开始听写播报失败:', e);
-                clearTimeout(fallbackTimer);
-                proceedToFirstGroup();
-            }
-        }
-
-        function speakNextGroup() {
-            if (!isDictating || currentGroupIndex >= dictationGroups.length) {
-                finishDictation();
-                return;
-            }
-            // 朗读期间关闭语音监听，避免 Safari 下抢占音频导致无声
-            stopDictationListening();
-            const group = dictationGroups[currentGroupIndex];
-            const roundEl = document.getElementById('dictationRound');
-            const wordEl = document.getElementById('dictationWord');
-            const timerEl = document.getElementById('dictationTimer');
-
-            roundEl.textContent = `第 ${currentGroupIndex + 1} / ${dictationGroups.length} 组`;
-            wordEl.textContent = group.join('  ');
-
-            // 第一遍朗读
-            let wordIndex = 0;
-            function speakFirstRound() {
-                if (wordIndex >= group.length || !isDictating) return;
-                timerEl.textContent = `第一遍 ${wordIndex + 1}/${group.length}`;
-                const utterance = new SpeechSynthesisUtterance(group[wordIndex]);
-                utterance.lang = 'zh-CN'; utterance.rate = 0.8; utterance.pitch = 1;
-                utterance.onend = () => {
-                    wordIndex++;
-                    if (wordIndex < group.length) {
-                        setTimeout(() => speakFirstRound(), 800);
-                    } else {
-                        // 第一遍读完，等待 PAUSE_FIRST_TO_SECOND 秒念第二遍
-                        let waitCount = PAUSE_FIRST_TO_SECOND;
-                        startDictationListening();
-                        timerEl.textContent = `${waitCount}秒后第二遍...`;
-                        countdownTimer = setInterval(() => {
-                            if (!isDictating) { clearInterval(countdownTimer); return; }
-                            waitCount--;
-                            timerEl.textContent = waitCount > 0 ? `${waitCount}秒后第二遍...` : '第二遍';
-                            if (waitCount <= 0) {
-                                clearInterval(countdownTimer);
-                                stopDictationListening();
-                                wordIndex = 0;
-                                setTimeout(() => speakSecondRound(), 600);
-                            }
-                        }, 1000);
-                    }
-                };
-                speechSynthesis.speak(utterance);
-            }
-
-            function speakSecondRound() {
-                if (wordIndex >= group.length || !isDictating) return;
-                timerEl.textContent = `第二遍 ${wordIndex + 1}/${group.length}`;
-                const utterance = new SpeechSynthesisUtterance(group[wordIndex]);
-                utterance.lang = 'zh-CN'; utterance.rate = 0.8; utterance.pitch = 1;
-                utterance.onend = () => {
-                    wordIndex++;
-                    if (wordIndex < group.length) {
-                        setTimeout(() => speakSecondRound(), 800);
-                    } else {
-                        // 第二遍读完，等待 PAUSE_SECOND_TO_NEXT 秒下一组
-                        let waitCount = PAUSE_SECOND_TO_NEXT;
-                        startDictationListening();
-                        timerEl.textContent = `${waitCount}秒后下一组...`;
-                        countdownTimer = setInterval(() => {
-                            if (!isDictating) { clearInterval(countdownTimer); return; }
-                            waitCount--;
-                            timerEl.textContent = waitCount > 0 ? `${waitCount}秒后下一组...` : '下一组';
-                            if (waitCount <= 0) {
-                                clearInterval(countdownTimer);
-                                stopDictationListening();
-                                currentGroupIndex++;
-                                speakNextGroup();
-                            }
-                        }, 1000);
-                    }
-                };
-                speechSynthesis.speak(utterance);
-            }
-
-            speakFirstRound();
-        }
-
         function skipGroup() {
             if (!isDictating) return;
+            skipRequested = true;
             clearInterval(countdownTimer);
             speechSynthesis.cancel();
-            currentGroupIndex++;
-            if (currentGroupIndex < dictationGroups.length) {
-                setTimeout(() => speakNextGroup(), 500);
-            } else {
-                finishDictation();
-            }
+            document.getElementById('dictationTimer').textContent = '正在切换到下一组...';
         }
 
         function stopDictation() {
             isDictating = false;
+            dictationSessionId++;
+            skipRequested = false;
             clearInterval(dictationTimer);
             clearInterval(countdownTimer);
             speechSynthesis.cancel();
