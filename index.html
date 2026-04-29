@@ -879,18 +879,18 @@
         let isDictating = false;
         let dictationTimer = null;
         let countdownTimer = null;
-        let recognition = null;
-        let isListening = false;
+        let commandRecognition = null;
+        let dictationRecognition = null;
         let currentCommand = null;  // 解析后的指令对象
 
         const DEFAULT_WORD_COUNT = 30;
         const GROUP_SIZE = 3;
-        const PAUSE_FIRST_TO_SECOND = 5;   // 第一遍到第二遍等待5秒
+        const PAUSE_FIRST_TO_SECOND = 10;  // 第一遍到第二遍等待10秒
         const PAUSE_SECOND_TO_NEXT = 50;  // 第二遍到下一组等待50秒
         const WORDS_PER_LESSON_MIN = 30;  // 不足30个词则全部报完
 
         // ==================== 默认词语表数据（二年级下册 - 可编辑版）====================
-        const DEFAULT_VOCAB_DOCX = '（gwq编辑版）二年级下册词语表-可编辑版.docx';
+        const DEFAULT_VOCAB_DOCX = '（gwq编辑-核对版）二年级下册词语表-可编辑版.docx';
         let hasCustomUpload = false;
 
         // ==================== 解析文本内容（按单元范围）====================
@@ -1250,6 +1250,8 @@
                 desc = `报${result.unit.name}，共${selectedWords.length}词，分${dictationGroups.length}组`;
             } else if (result.type === 'lesson') {
                 desc = `报第${result.lessonNum}课，共${selectedWords.length}词，分${dictationGroups.length}组`;
+            } else if (result.type === 'lesson_range') {
+                desc = `报第${result.startLessonNum}课到第${result.endLessonNum}课，共${selectedWords.length}词，分${dictationGroups.length}组`;
             } else if (result.type === 'park') {
                 desc = `报${result.parkName}，共${selectedWords.length}词，分${dictationGroups.length}组`;
             }
@@ -1308,7 +1310,29 @@
                 return { success: true, type: 'single_unit', unit, count: result.count };
             }
 
-            // 4. 检查课 "第8课" / "第3课"
+            // 4. 检查课范围 "第3课到第5课"
+            const lessonRangeMatch = text.match(/第(\d+)[课課][到至~](第)?(\d+)[课課]/);
+            if (lessonRangeMatch) {
+                const startLessonNum = parseInt(lessonRangeMatch[1], 10);
+                const endLessonNum = parseInt(lessonRangeMatch[3], 10);
+                if (startLessonNum > endLessonNum) {
+                    return { success: false, error: '课范围有误，请从小到大说，如“第3课到第5课”' };
+                }
+                const lessonsInRange = [];
+                for (const unit of vocabData.units) {
+                    for (const lesson of unit.lessons) {
+                        if (lesson.num >= startLessonNum && lesson.num <= endLessonNum) {
+                            lessonsInRange.push({ unit, lesson });
+                        }
+                    }
+                }
+                if (lessonsInRange.length === 0) {
+                    return { success: false, error: `未找到第${startLessonNum}课到第${endLessonNum}课` };
+                }
+                return { success: true, type: 'lesson_range', startLessonNum, endLessonNum, lessonsInRange, count: result.count };
+            }
+
+            // 5. 检查课 "第8课" / "第3课"
             const lessonMatch = text.match(/第(\d+)[课課]/);
             if (lessonMatch) {
                 const lessonNum = parseInt(lessonMatch[1]);
@@ -1318,7 +1342,7 @@
                 return { success: true, type: 'lesson', lessonNum, unit, count: result.count };
             }
 
-            // 5. 模糊匹配：只说了"报词语"，默认全范围
+            // 6. 模糊匹配：只说了"报词语"，默认全范围
             if (lower.includes('报') || lower.includes('听写')) {
                 if (vocabData.units.length > 0) {
                     return { success: true, type: 'unit_range', startUnit: vocabData.units[0], endUnit: vocabData.units[vocabData.units.length - 1], count: result.count };
@@ -1372,6 +1396,10 @@
                     pool = lesson.words || [];
                     // 如果该课不足30个词，规则是"全部报完该课后结束"
                     // 但这里只是返回可用词池，由调用方决定
+                }
+            } else if (cmd.type === 'lesson_range') {
+                for (const item of cmd.lessonsInRange) {
+                    pool = pool.concat(item.lesson.words || []);
                 }
             }
 
@@ -1545,32 +1573,32 @@
                 return;
             }
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.lang = 'zh-CN';
-            recognition.continuous = true;
-            recognition.interimResults = true;
+            commandRecognition = new SpeechRecognition();
+            commandRecognition.lang = 'zh-CN';
+            commandRecognition.continuous = true;
+            commandRecognition.interimResults = true;
             holdTranscript = '';
             const btn = document.getElementById('voiceCommandBtn');
             btn.classList.add('listening');
             btn.innerHTML = '🎤 松开结束';
 
-            recognition.onresult = (event) => {
+            commandRecognition.onresult = (event) => {
                 let transcript = '';
                 for (let i = event.resultIndex; i < event.results.length; i++) {
                     transcript += event.results[i][0].transcript;
                 }
                 holdTranscript = transcript.trim();
             };
-            recognition.onerror = () => {
+            commandRecognition.onerror = () => {
                 btn.classList.remove('listening');
                 btn.innerHTML = '🎤 按住说要求';
             };
-            recognition.onend = () => {
+            commandRecognition.onend = () => {
                 btn.classList.remove('listening');
                 btn.innerHTML = '🎤 按住说要求';
             };
             try {
-                recognition.start();
+                commandRecognition.start();
             } catch (e) {
                 console.error('语音识别启动失败:', e);
                 btn.classList.remove('listening');
@@ -1579,8 +1607,8 @@
             }
         }
         function endVoiceCommandPress() {
-            if (!recognition) return;
-            recognition.stop();
+            if (!commandRecognition) return;
+            commandRecognition.stop();
             const transcript = holdTranscript.trim();
             holdTranscript = '';
             if (!transcript) {
@@ -1591,12 +1619,57 @@
             processVoiceCommand(transcript);
         }
 
+        function startDictationListening() {
+            if (!isDictating || document.hidden) return;
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            dictationRecognition = new SpeechRecognition();
+            dictationRecognition.lang = 'zh-CN';
+            dictationRecognition.continuous = true;
+            dictationRecognition.interimResults = false;
+            dictationRecognition.onresult = (event) => {
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (transcript.includes('下一组') || transcript.includes('下组') || transcript.includes('跳过')) {
+                        skipGroup();
+                        break;
+                    }
+                }
+            };
+            dictationRecognition.onerror = () => {
+                if (isDictating && !document.hidden) setTimeout(startDictationListening, 800);
+            };
+            dictationRecognition.onend = () => {
+                if (isDictating && !document.hidden) setTimeout(startDictationListening, 500);
+            };
+            try {
+                dictationRecognition.start();
+            } catch (e) {
+                console.error('听写语音监听启动失败:', e);
+            }
+        }
+        function stopDictationListening() {
+            if (!dictationRecognition) return;
+            try { dictationRecognition.stop(); } catch (_) {}
+            dictationRecognition = null;
+        }
+
+        function unlockSpeechSynthesis() {
+            try {
+                // 仅预热，不取消后续正式播报队列，避免首句被中断
+                speechSynthesis.getVoices();
+            } catch (e) {
+                console.error('语音引擎预热失败:', e);
+            }
+        }
+
         // ==================== 报听写流程 ====================
         function startDictation() {
             if (dictationGroups.length === 0) {
                 showDictationStatus('⚠️ 请先设置听写范围', 'error');
                 return;
             }
+            unlockSpeechSynthesis();
             isDictating = true;
             currentGroupIndex = 0;
 
@@ -1628,13 +1701,41 @@
 
         function speakStartPromptThenNextGroup() {
             if (!isDictating) return;
+            const roundEl = document.getElementById('dictationRound');
+            const wordEl = document.getElementById('dictationWord');
+            const timerEl = document.getElementById('dictationTimer');
+            roundEl.textContent = '开始听写';
+            wordEl.textContent = '开始听写';
+            timerEl.textContent = '';
+
+            let proceeded = false;
+            const proceedToFirstGroup = () => {
+                if (proceeded || !isDictating) return;
+                proceeded = true;
+                startDictationListening();
+                setTimeout(() => speakNextGroup(), 200);
+            };
+            const fallbackTimer = setTimeout(proceedToFirstGroup, 1600);
+
             const startUtterance = new SpeechSynthesisUtterance('开始听写');
             startUtterance.lang = 'zh-CN';
             startUtterance.rate = 0.9;
             startUtterance.pitch = 1;
-            startUtterance.onend = () => setTimeout(() => speakNextGroup(), 250);
-            startUtterance.onerror = () => setTimeout(() => speakNextGroup(), 250);
-            speechSynthesis.speak(startUtterance);
+            startUtterance.onend = () => {
+                clearTimeout(fallbackTimer);
+                proceedToFirstGroup();
+            };
+            startUtterance.onerror = () => {
+                clearTimeout(fallbackTimer);
+                proceedToFirstGroup();
+            };
+            try {
+                speechSynthesis.speak(startUtterance);
+            } catch (e) {
+                console.error('开始听写播报失败:', e);
+                clearTimeout(fallbackTimer);
+                proceedToFirstGroup();
+            }
         }
 
         function speakNextGroup() {
@@ -1726,7 +1827,7 @@
             clearInterval(dictationTimer);
             clearInterval(countdownTimer);
             speechSynthesis.cancel();
-            if (recognition) recognition.stop();
+            stopDictationListening();
 
             document.getElementById('startDictationBtn').disabled = false;
             document.getElementById('dictationControlsRow').style.display = 'none';
@@ -1806,14 +1907,17 @@
             voiceBtn.addEventListener('dragstart', blockContext);
             document.addEventListener('visibilitychange', () => {
                 if (document.hidden) {
-                    if (recognition) {
-                        try { recognition.stop(); } catch (_) {}
+                    if (commandRecognition) {
+                        try { commandRecognition.stop(); } catch (_) {}
                     }
+                    stopDictationListening();
                     isVoicePressing = false;
                     holdTranscript = '';
                     document.body.classList.remove('voice-pressing');
                     voiceBtn.classList.remove('listening');
                     voiceBtn.innerHTML = '🎤 按住说要求';
+                } else if (isDictating) {
+                    startDictationListening();
                 }
             });
             await loadDefaultData();
