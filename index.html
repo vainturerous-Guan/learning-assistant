@@ -880,7 +880,6 @@
         let dictationTimer = null;
         let countdownTimer = null;
         let commandRecognition = null;
-        let dictationRecognition = null;
         let currentCommand = null;  // 解析后的指令对象
 
         const DEFAULT_WORD_COUNT = 30;
@@ -1233,8 +1232,9 @@
                 return;
             }
 
-            // 按权重随机打乱
-            selectedWords = weightedShuffle(words, result.count);
+            // 按规则确定数量后再加权随机
+            const targetCount = resolveTargetCount(words.length, result.count, result.explicitCount);
+            selectedWords = weightedShuffle(words, targetCount);
 
             // 分组（每组3个）
             dictationGroups = [];
@@ -1263,7 +1263,7 @@
 
         // 解析用户指令，返回范围信息
         function parseCommand(text) {
-            const result = { count: DEFAULT_WORD_COUNT, groupSize: GROUP_SIZE };
+            const result = { count: DEFAULT_WORD_COUNT, groupSize: GROUP_SIZE, explicitCount: false };
             const lower = text.toLowerCase();
             const parseCnNumber = (raw) => {
                 if (!raw) return null;
@@ -1278,9 +1278,15 @@
                 return CHINESE_NUM_MAP[raw] ?? null;
             };
 
-            // 提取数量
-            const countMatch = text.match(/(\d+)[个]?[词字]/);
-            if (countMatch) result.count = parseInt(countMatch[1]);
+            // 提取数量（支持“20个词”“二十个词”）
+            const countMatch = text.match(/([一二三四五六七八九十两\d]+)[个]?[词字]/);
+            if (countMatch) {
+                const parsedCount = parseCnNumber(countMatch[1]);
+                if (parsedCount && parsedCount > 0) {
+                    result.count = parsedCount;
+                    result.explicitCount = true;
+                }
+            }
 
             // 提取每组数量
             const groupMatch = text.match(/每(\d+)[个]?[词字]?[为]?一?[组]/);
@@ -1296,7 +1302,7 @@
                 // 找到包含该园地的单元
                 const targetUnit = vocabData.units.find(u => u.name.includes(parkName.replace('语文园地', '')) || (u.park && u.park.length > 0));
                 if (!targetUnit) return { success: false, error: '未找到' + parkName + '（请先加载包含该园地的词语表）' };
-                return { success: true, type: 'park', parkName, unit: targetUnit, count: result.count };
+                return { success: true, type: 'park', parkName, unit: targetUnit, count: result.count, explicitCount: result.explicitCount };
             }
 
             // 2. 优先检查课范围 "第3课到第5课" / "第三课到第五课"
@@ -1323,7 +1329,7 @@
                 if (lessonsInRange.length === 0) {
                     return { success: false, error: `未找到第${start}课到第${end}课` };
                 }
-                return { success: true, type: 'lesson_range', startLessonNum: start, endLessonNum: end, lessonsInRange, count: result.count };
+                return { success: true, type: 'lesson_range', startLessonNum: start, endLessonNum: end, lessonsInRange, count: result.count, explicitCount: result.explicitCount };
             }
 
             // 3. 检查单课 "第8课" / "第八课"
@@ -1334,7 +1340,7 @@
                 // 找到包含该课的单元
                 const unit = vocabData.units.find(u => u.lessons.some(l => l.num === lessonNum));
                 if (!unit) return { success: false, error: '未找到第' + lessonNum + '课（请确认该课存在于当前词语表中）' };
-                return { success: true, type: 'lesson', lessonNum, unit, count: result.count };
+                return { success: true, type: 'lesson', lessonNum, unit, count: result.count, explicitCount: result.explicitCount };
             }
 
             // 4. 检查单元范围 "第一单元到第三单元" / "第一单元至第三单元"
@@ -1346,7 +1352,7 @@
                 const endUnit = findUnitByNumber(end);
                 if (!startUnit) return { success: false, error: '未找到第' + start + '单元（可用单元：' + vocabData.units.map(u => u.name).join('、') + '）' };
                 if (!endUnit) return { success: false, error: '未找到第' + end + '单元（可用单元：' + vocabData.units.map(u => u.name).join('、') + '）' };
-                return { success: true, type: 'unit_range', startUnit, endUnit, count: result.count };
+                return { success: true, type: 'unit_range', startUnit, endUnit, count: result.count, explicitCount: result.explicitCount };
             }
 
             // 5. 检查单个单元 "第一单元" / "第二单元"
@@ -1358,13 +1364,13 @@
                     const available = vocabData.units.map(u => u.name).join('、') || '无';
                     return { success: false, error: '未找到第' + num + '单元（当前可用：' + available + '）' };
                 }
-                return { success: true, type: 'single_unit', unit, count: result.count };
+                return { success: true, type: 'single_unit', unit, count: result.count, explicitCount: result.explicitCount };
             }
 
             // 6. 模糊匹配：只说了"报词语"，默认全范围
             if (lower.includes('报') || lower.includes('听写')) {
                 if (vocabData.units.length > 0) {
-                    return { success: true, type: 'unit_range', startUnit: vocabData.units[0], endUnit: vocabData.units[vocabData.units.length - 1], count: result.count };
+                    return { success: true, type: 'unit_range', startUnit: vocabData.units[0], endUnit: vocabData.units[vocabData.units.length - 1], count: result.count, explicitCount: result.explicitCount };
                 }
             }
 
@@ -1431,30 +1437,13 @@
             });
         }
 
+        function resolveTargetCount(poolLength, requestedCount, explicitCount) {
+            if (explicitCount) return Math.min(requestedCount, poolLength);
+            return poolLength < DEFAULT_WORD_COUNT ? poolLength : DEFAULT_WORD_COUNT;
+        }
+
         // 加权随机抽取并打乱
         function weightedShuffle(words, count) {
-            // 如果指定了某课且总词数不足WORDS_PER_LESSON_MIN(30)，则全部报完
-            if (words.length <= WORDS_PER_LESSON_MIN) {
-                // 全部使用，但按权重打乱顺序
-                const pool = [...words];
-                const result = [];
-                while (pool.length > 0) {
-                    const totalWeight = pool.reduce((s, w) => s + (w.underlined ? 1.5 : 1.0), 0);
-                    let r = Math.random() * totalWeight;
-                    for (let i = 0; i < pool.length; i++) {
-                        const w = pool[i].underlined ? 1.5 : 1.0;
-                        r -= w;
-                        if (r <= 0) {
-                            result.push(pool[i]);
-                            pool.splice(i, 1);
-                            break;
-                        }
-                    }
-                }
-                return result;
-            }
-
-            // 词数足够，按count抽取
             const pool = [...words];
             const result = [];
             const targetCount = Math.min(count, pool.length);
@@ -1640,40 +1629,9 @@
             processVoiceCommand(transcript);
         }
 
-        function startDictationListening() {
-            if (!isDictating || document.hidden) return;
-            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            dictationRecognition = new SpeechRecognition();
-            dictationRecognition.lang = 'zh-CN';
-            dictationRecognition.continuous = true;
-            dictationRecognition.interimResults = false;
-            dictationRecognition.onresult = (event) => {
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    const transcript = event.results[i][0].transcript;
-                    if (transcript.includes('下一组') || transcript.includes('下组') || transcript.includes('跳过')) {
-                        skipGroup();
-                        break;
-                    }
-                }
-            };
-            dictationRecognition.onerror = () => {
-                if (isDictating && !document.hidden) setTimeout(startDictationListening, 800);
-            };
-            dictationRecognition.onend = () => {
-                if (isDictating && !document.hidden) setTimeout(startDictationListening, 500);
-            };
-            try {
-                dictationRecognition.start();
-            } catch (e) {
-                console.error('听写语音监听启动失败:', e);
-            }
-        }
-        function stopDictationListening() {
-            if (!dictationRecognition) return;
-            try { dictationRecognition.stop(); } catch (_) {}
-            dictationRecognition = null;
-        }
+        // 听写阶段不占用麦克风，麦克风仅用于“按住说要求”
+        function startDictationListening() {}
+        function stopDictationListening() {}
 
         function unlockSpeechSynthesis() {
             try {
@@ -1716,16 +1674,13 @@
 
         async function waitCountdown(seconds, label, sessionId) {
             const timerEl = document.getElementById('dictationTimer');
-            startDictationListening();
             for (let t = seconds; t > 0; t--) {
                 if (!isDictating || sessionId !== dictationSessionId || skipRequested) {
-                    stopDictationListening();
                     return false;
                 }
                 timerEl.textContent = `${t}秒后${label}...`;
                 await new Promise(r => setTimeout(r, 1000));
             }
-            stopDictationListening();
             return !skipRequested && isDictating && sessionId === dictationSessionId;
         }
 
@@ -1744,7 +1699,6 @@
             roundEl.textContent = `第 ${currentGroupIndex + 1} / ${dictationGroups.length} 组`;
             wordEl.textContent = group.join('  ');
             timerEl.textContent = '第一遍';
-            stopDictationListening();
 
             for (let i = 0; i < group.length; i++) {
                 if (!isDictating || sessionId !== dictationSessionId || skipRequested) break;
@@ -1774,7 +1728,6 @@
         function moveToNextGroup(sessionId) {
             if (!isDictating || sessionId !== dictationSessionId) return;
             skipRequested = false;
-            stopDictationListening();
             speechSynthesis.cancel();
             currentGroupIndex++;
             if (currentGroupIndex >= dictationGroups.length) {
@@ -1843,7 +1796,6 @@
             clearInterval(dictationTimer);
             clearInterval(countdownTimer);
             speechSynthesis.cancel();
-            stopDictationListening();
 
             document.getElementById('startDictationBtn').disabled = false;
             document.getElementById('dictationControlsRow').style.display = 'none';
@@ -1926,14 +1878,11 @@
                     if (commandRecognition) {
                         try { commandRecognition.stop(); } catch (_) {}
                     }
-                    stopDictationListening();
                     isVoicePressing = false;
                     holdTranscript = '';
                     document.body.classList.remove('voice-pressing');
                     voiceBtn.classList.remove('listening');
                     voiceBtn.innerHTML = '🎤 按住说要求';
-                } else if (isDictating) {
-                    startDictationListening();
                 }
             });
             await loadDefaultData();
