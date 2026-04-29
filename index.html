@@ -1649,6 +1649,7 @@
                 utterance.lang = 'zh-CN';
                 utterance.rate = rate;
                 utterance.pitch = 1;
+                utterance.volume = 1;
                 let finished = false;
                 const fallback = setTimeout(() => {
                     if (finished) return;
@@ -1664,6 +1665,8 @@
                 utterance.onend = () => done(true);
                 utterance.onerror = () => done(false);
                 try {
+                    // Safari/微信中偶发进入暂停态，先resume可显著降低无声概率
+                    speechSynthesis.resume();
                     speechSynthesis.speak(utterance);
                 } catch (e) {
                     console.error('语音播报失败:', e);
@@ -1787,6 +1790,8 @@
             clearInterval(countdownTimer);
             speechSynthesis.cancel();
             document.getElementById('dictationTimer').textContent = '正在切换到下一组...';
+            // 立即切换，不依赖当前播报回调，避免卡住
+            moveToNextGroup(dictationSessionId);
         }
 
         function stopDictation() {
